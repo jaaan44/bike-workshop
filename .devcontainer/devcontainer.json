@@ -1,0 +1,24 @@
+{
+	"name": "Bike Workshop (Laravel Sail)",
+	"dockerComposeFile": ["../compose.yaml"],
+	"service": "laravel.test",
+	"workspaceFolder": "/var/www/html",
+	"shutdownAction": "stopCompose",
+	"forwardPorts": [80, 5173, 3306],
+	"portsAttributes": {
+		"80": { "label": "App" },
+		"5173": { "label": "Vite" },
+		"3306": { "label": "MySQL" }
+	},
+	"postCreateCommand": "composer install && npm install && [ -f .env ] || cp .env.example .env && php artisan key:generate --ansi && php artisan migrate --graceful --ansi",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"bmewburn.vscode-intelephense-client",
+				"onecentlin.laravel-blade",
+				"bradlc.vscode-tailwindcss"
+			]
+		}
+	},
+	"remoteUser": "sail"
+}
