@@ -13,6 +13,12 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Trust the reverse proxy in front of the app (GitHub Codespaces port
+        // forwarding, Docker, etc.) so asset()/url() generation uses the
+        // public-facing host from X-Forwarded-* headers instead of the
+        // internal container host, which the browser can't reach.
+        $middleware->trustProxies(at: '*');
+
         $middleware->alias([
             'role' => EnsureUserHasRole::class,
         ]);
