@@ -13,7 +13,7 @@
 		"5173": { "label": "Vite" },
 		"3306": { "label": "MySQL" }
 	},
-	"postCreateCommand": "sudo docker-php-ext-install pdo_mysql && echo 'extension=pdo_mysql.so' | sudo tee /usr/local/etc/php/conf.d/docker-php-ext-pdo_mysql.ini > /dev/null && composer install && npm install && npm run build && ( [ -f .env ] || cp .env.example .env ) && php artisan key:generate --ansi && for i in $(seq 1 30); do (echo > /dev/tcp/mysql/3306) >/dev/null 2>&1 && break; sleep 2; done && php artisan migrate --graceful --seed --ansi",
+	"postCreateCommand": "sudo bash -c 'PHP_INI_DIR=/usr/local/etc/php docker-php-ext-install pdo_mysql' && composer install && npm install && npm run build && ( [ -f .env ] || cp .env.example .env ) && php artisan key:generate --ansi && for i in $(seq 1 30); do (echo > /dev/tcp/mysql/3306) >/dev/null 2>&1 && break; sleep 2; done && php artisan migrate --graceful --seed --ansi",
 	"customizations": {
 		"vscode": {
 			"extensions": [
