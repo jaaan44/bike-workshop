@@ -28,7 +28,14 @@ Route::middleware('auth')->group(function () {
 
 Route::middleware(['auth', 'role:customer'])->prefix('customer')->name('customer.')->group(function () {
     Route::get('/home', [CustomerHomeController::class, 'index'])->name('home');
+
     Route::get('/bikes', [BikeController::class, 'index'])->name('bikes.index');
+    Route::get('/bikes/create', [BikeController::class, 'create'])->name('bikes.create');
+    Route::post('/bikes', [BikeController::class, 'store'])->name('bikes.store');
+    Route::get('/bikes/{bicycle}', [BikeController::class, 'show'])->name('bikes.show');
+    Route::get('/bikes/{bicycle}/edit', [BikeController::class, 'edit'])->name('bikes.edit');
+    Route::put('/bikes/{bicycle}', [BikeController::class, 'update'])->name('bikes.update');
+
     Route::get('/repairs', [RepairController::class, 'index'])->name('repairs.index');
 });
 

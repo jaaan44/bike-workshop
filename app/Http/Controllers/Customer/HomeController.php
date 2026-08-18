@@ -12,6 +12,7 @@ class HomeController extends Controller
     {
         return view('customer.home', [
             'user' => $request->user(),
+            'bicycles' => $request->user()->bicycles()->with('bicycleType')->latest()->get(),
         ]);
     }
 }
