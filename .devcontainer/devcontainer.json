@@ -1,16 +1,19 @@
 {
-	"name": "Bike Workshop (Laravel Sail)",
-	"dockerComposeFile": ["../compose.yaml"],
-	"service": "laravel.test",
-	"workspaceFolder": "/var/www/html",
+	"name": "Bike Workshop (PHP + MySQL)",
+	"dockerComposeFile": "docker-compose.yml",
+	"service": "app",
+	"workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
 	"shutdownAction": "stopCompose",
-	"forwardPorts": [80, 5173, 3306],
+	"features": {
+		"ghcr.io/devcontainers/features/node:1": { "version": "22" }
+	},
+	"forwardPorts": [8000, 5173, 3306],
 	"portsAttributes": {
-		"80": { "label": "App" },
+		"8000": { "label": "App" },
 		"5173": { "label": "Vite" },
 		"3306": { "label": "MySQL" }
 	},
-	"postCreateCommand": "composer install && npm install && [ -f .env ] || cp .env.example .env && php artisan key:generate --ansi && php artisan migrate --graceful --ansi",
+	"postCreateCommand": "composer install && npm install && ( [ -f .env ] || cp .env.example .env ) && php artisan key:generate --ansi && php artisan migrate --graceful --seed --ansi",
 	"customizations": {
 		"vscode": {
 			"extensions": [
@@ -20,5 +23,5 @@
 			]
 		}
 	},
-	"remoteUser": "sail"
+	"remoteUser": "vscode"
 }

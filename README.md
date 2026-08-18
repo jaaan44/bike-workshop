@@ -2,25 +2,31 @@
 
 A mobile-first bicycle repair shop management app. Customers register bikes, book repairs, and track status; workshop staff manage bookings and repair jobs.
 
-Stack: Laravel 13 + Blade + Tailwind CSS + Alpine.js (via Laravel Breeze), MySQL, Laravel Sail for local Docker development.
+Stack: Laravel 13 + Blade + Tailwind CSS + Alpine.js (via Laravel Breeze), MySQL.
 
 ## Setup (GitHub Codespaces)
 
-This repo includes a `.devcontainer` that reuses Sail's `compose.yaml`, so opening it in Codespaces should bring up the app container and a MySQL service automatically. If you need to do it manually:
+This repo includes a `.devcontainer` (a plain PHP 8.4 + Node container alongside a MySQL 8.4 service — no custom image build, so it works on first Codespace creation without `vendor/` needing to exist yet). Opening the repo in Codespaces provisions both containers and automatically runs `composer install`, `npm install`, `.env` setup, `key:generate`, and `migrate --seed`.
+
+Once the container is ready, start the app:
+
+```bash
+php artisan serve --host=0.0.0.0 --port=8000   # forwarded automatically in Codespaces
+npm run dev                                     # in a second terminal, for Vite/Tailwind hot reload
+```
+
+### Manual setup (if not using the devcontainer)
 
 ```bash
 composer install
 cp .env.example .env
 php artisan key:generate
 
+# Laravel Sail (Docker) is already set up (compose.yaml) if you'd rather
+# run MySQL that way instead of a local/native MySQL install:
 ./vendor/bin/sail up -d
 ./vendor/bin/sail artisan migrate --seed
-
-npm install
-npm run build   # or: ./vendor/bin/sail npm run dev
 ```
-
-App runs at `http://localhost` (port 80, forwarded automatically in Codespaces).
 
 ## Demo accounts
 
@@ -35,7 +41,7 @@ Seeded by `php artisan db:seed` (password for all: `password`):
 ## Running tests
 
 ```bash
-./vendor/bin/sail artisan test
+php artisan test
 ```
 
 ## Roles
