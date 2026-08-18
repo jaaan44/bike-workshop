@@ -37,6 +37,9 @@ Route::middleware(['auth', 'role:customer'])->prefix('customer')->name('customer
     Route::put('/bikes/{bicycle}', [BikeController::class, 'update'])->name('bikes.update');
 
     Route::get('/repairs', [RepairController::class, 'index'])->name('repairs.index');
+    Route::get('/repairs/create', [RepairController::class, 'create'])->name('repairs.create');
+    Route::post('/repairs', [RepairController::class, 'store'])->name('repairs.store');
+    Route::get('/repairs/{booking}', [RepairController::class, 'show'])->name('repairs.show');
 });
 
 Route::middleware(['auth', 'role:staff,technician'])->prefix('staff')->name('staff.')->group(function () {

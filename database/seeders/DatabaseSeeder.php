@@ -16,6 +16,7 @@ class DatabaseSeeder extends Seeder
     public function run(): void
     {
         $this->call(BicycleTypeSeeder::class);
+        $this->call(BicyclePartSeeder::class);
 
         // Demo accounts for manual testing (password for all: "password").
         // Checking existence first (rather than firstOrCreate with a factory's

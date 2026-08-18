@@ -63,4 +63,12 @@ class User extends Authenticatable
     {
         return $this->hasMany(Bicycle::class);
     }
+
+    /**
+     * @return HasMany<Booking, $this>
+     */
+    public function bookings(): HasMany
+    {
+        return $this->hasMany(Booking::class);
+    }
 }
