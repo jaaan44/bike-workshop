@@ -6,6 +6,7 @@ use App\Enums\BookingStatus;
 use App\Models\Bicycle;
 use App\Models\Booking;
 use App\Models\RepairInspection;
+use App\Models\RepairItem;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -302,5 +303,116 @@ class StaffBookingManagementTest extends TestCase
         $this->actingAs($customer)
             ->post(route('staff.bookings.notes.store', $booking), ['note' => 'x'])
             ->assertForbidden();
+    }
+
+    public function test_staff_can_request_customer_approval_once_repair_items_exist(): void
+    {
+        $staff = User::factory()->staff()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::Inspection);
+        $booking->repairItems()->create(['description' => 'Replace brake pads']);
+
+        $this->actingAs($staff)
+            ->post(route('staff.bookings.approval.request', $booking))
+            ->assertRedirect();
+
+        $this->assertSame(BookingStatus::AwaitingCustomerApproval, $booking->refresh()->status);
+    }
+
+    public function test_staff_cannot_request_approval_without_any_repair_items(): void
+    {
+        $staff = User::factory()->staff()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::Inspection);
+
+        $this->actingAs($staff)
+            ->post(route('staff.bookings.approval.request', $booking))
+            ->assertRedirect();
+
+        $this->assertSame(BookingStatus::Inspection, $booking->refresh()->status);
+    }
+
+    public function test_staff_can_complete_repairs_once_all_items_are_done(): void
+    {
+        $staff = User::factory()->staff()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::RepairInProgress);
+        RepairItem::factory()->for($booking)->completed()->create(['description' => 'Replace brake pads']);
+
+        $this->actingAs($staff)
+            ->post(route('staff.bookings.repairs.complete', $booking))
+            ->assertRedirect();
+
+        $this->assertSame(BookingStatus::RepairCompleted, $booking->refresh()->status);
+    }
+
+    public function test_staff_cannot_complete_repairs_with_an_unfinished_item(): void
+    {
+        $staff = User::factory()->staff()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::RepairInProgress);
+        $booking->repairItems()->create(['description' => 'Replace brake pads']);
+
+        $this->actingAs($staff)
+            ->post(route('staff.bookings.repairs.complete', $booking))
+            ->assertRedirect();
+
+        $this->assertSame(BookingStatus::RepairInProgress, $booking->refresh()->status);
+    }
+
+    public function test_staff_can_start_quality_check(): void
+    {
+        $staff = User::factory()->staff()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::RepairCompleted);
+
+        $this->actingAs($staff)
+            ->post(route('staff.bookings.quality-check.start', $booking))
+            ->assertRedirect();
+
+        $this->assertSame(BookingStatus::QualityCheck, $booking->refresh()->status);
+    }
+
+    public function test_passing_quality_check_moves_to_ready_for_pickup_or_delivery(): void
+    {
+        $staff = User::factory()->staff()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::QualityCheck);
+
+        $this->actingAs($staff)
+            ->post(route('staff.bookings.quality-check.pass', $booking), ['fulfillment_method' => 'delivery'])
+            ->assertRedirect();
+
+        $this->assertSame(BookingStatus::ReadyForDelivery, $booking->refresh()->status);
+    }
+
+    public function test_failing_quality_check_sends_the_booking_back_for_rework(): void
+    {
+        $staff = User::factory()->staff()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::QualityCheck);
+
+        $this->actingAs($staff)
+            ->post(route('staff.bookings.quality-check.fail', $booking))
+            ->assertRedirect();
+
+        $this->assertSame(BookingStatus::RepairInProgress, $booking->refresh()->status);
+    }
+
+    public function test_staff_can_fulfill_a_booking_ready_for_pickup(): void
+    {
+        $staff = User::factory()->staff()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::ReadyForPickup);
+
+        $this->actingAs($staff)
+            ->post(route('staff.bookings.fulfill', $booking))
+            ->assertRedirect();
+
+        $this->assertSame(BookingStatus::Completed, $booking->refresh()->status);
+    }
+
+    public function test_staff_cannot_fulfill_a_booking_that_is_not_ready(): void
+    {
+        $staff = User::factory()->staff()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::RepairInProgress);
+
+        $this->actingAs($staff)
+            ->post(route('staff.bookings.fulfill', $booking))
+            ->assertRedirect();
+
+        $this->assertSame(BookingStatus::RepairInProgress, $booking->refresh()->status);
     }
 }

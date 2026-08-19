@@ -159,4 +159,84 @@ class BookingController extends Controller
 
         return back()->with('status', 'note-added');
     }
+
+    public function requestApproval(Booking $booking): RedirectResponse
+    {
+        if ($booking->status !== BookingStatus::Inspection) {
+            return back()->with('error', 'This booking is not ready to be sent for approval.');
+        }
+
+        if ($booking->repairItems->isEmpty()) {
+            return back()->with('error', 'Add at least one repair item before requesting customer approval.');
+        }
+
+        $booking->transitionTo(BookingStatus::AwaitingCustomerApproval);
+
+        return back()->with('status', 'approval-requested');
+    }
+
+    public function completeRepairs(Booking $booking): RedirectResponse
+    {
+        if ($booking->status !== BookingStatus::RepairInProgress) {
+            return back()->with('error', 'This booking is not currently in repair.');
+        }
+
+        if ($booking->repairItems->isEmpty() || $booking->repairItems->contains(fn ($item) => ! $item->isCompleted())) {
+            return back()->with('error', 'Mark all repair items as done before completing the repair.');
+        }
+
+        $booking->transitionTo(BookingStatus::RepairCompleted);
+
+        return back()->with('status', 'repairs-completed');
+    }
+
+    public function startQualityCheck(Booking $booking): RedirectResponse
+    {
+        if ($booking->status !== BookingStatus::RepairCompleted) {
+            return back()->with('error', 'This booking is not ready for quality check.');
+        }
+
+        $booking->transitionTo(BookingStatus::QualityCheck);
+
+        return back()->with('status', 'quality-check-started');
+    }
+
+    public function passQualityCheck(Request $request, Booking $booking): RedirectResponse
+    {
+        if ($booking->status !== BookingStatus::QualityCheck) {
+            return back()->with('error', 'This booking is not currently in quality check.');
+        }
+
+        $data = $request->validate([
+            'fulfillment_method' => ['required', Rule::in(['pickup', 'delivery'])],
+        ]);
+
+        $booking->transitionTo(
+            $data['fulfillment_method'] === 'pickup' ? BookingStatus::ReadyForPickup : BookingStatus::ReadyForDelivery
+        );
+
+        return back()->with('status', 'quality-check-passed');
+    }
+
+    public function failQualityCheck(Booking $booking): RedirectResponse
+    {
+        if ($booking->status !== BookingStatus::QualityCheck) {
+            return back()->with('error', 'This booking is not currently in quality check.');
+        }
+
+        $booking->transitionTo(BookingStatus::RepairInProgress);
+
+        return back()->with('status', 'quality-check-failed');
+    }
+
+    public function fulfill(Booking $booking): RedirectResponse
+    {
+        if (! in_array($booking->status, [BookingStatus::ReadyForPickup, BookingStatus::ReadyForDelivery], true)) {
+            return back()->with('error', 'This booking is not ready to be completed.');
+        }
+
+        $booking->transitionTo(BookingStatus::Completed);
+
+        return back()->with('status', 'booking-completed');
+    }
 }

@@ -134,4 +134,74 @@ class BookingTest extends TestCase
         $this->assertSame("BR-{$year}-00001", $first->reference_number);
         $this->assertSame("BR-{$year}-00002", $second->reference_number);
     }
+
+    private function bookingAwaitingApproval(User $customer): Booking
+    {
+        $bicycle = Bicycle::factory()->for($customer)->create();
+        $booking = Booking::factory()->for($customer)->for($bicycle)->create();
+        $booking->forceFill(['status' => BookingStatus::AwaitingCustomerApproval])->save();
+        $booking->repairItems()->create(['description' => 'Replace brake pads']);
+
+        return $booking;
+    }
+
+    public function test_customer_can_approve_proposed_repairs(): void
+    {
+        $customer = User::factory()->create();
+        $booking = $this->bookingAwaitingApproval($customer);
+
+        $this->actingAs($customer)
+            ->post(route('customer.repairs.approve', $booking))
+            ->assertRedirect();
+
+        $this->assertSame(BookingStatus::RepairInProgress, $booking->refresh()->status);
+    }
+
+    public function test_customer_can_decline_proposed_repairs(): void
+    {
+        $customer = User::factory()->create();
+        $booking = $this->bookingAwaitingApproval($customer);
+
+        $this->actingAs($customer)
+            ->post(route('customer.repairs.decline', $booking))
+            ->assertRedirect();
+
+        $this->assertSame(BookingStatus::Inspection, $booking->refresh()->status);
+    }
+
+    public function test_customer_cannot_approve_a_booking_not_awaiting_approval(): void
+    {
+        $customer = User::factory()->create();
+        $bicycle = Bicycle::factory()->for($customer)->create();
+        $booking = Booking::factory()->for($customer)->for($bicycle)->create();
+
+        $this->actingAs($customer)->post(route('customer.repairs.approve', $booking));
+
+        $this->assertSame(BookingStatus::Pending, $booking->refresh()->status);
+    }
+
+    public function test_customer_cannot_approve_another_customers_booking(): void
+    {
+        $owner = User::factory()->create();
+        $booking = $this->bookingAwaitingApproval($owner);
+
+        $other = User::factory()->create();
+
+        $this->actingAs($other)
+            ->post(route('customer.repairs.approve', $booking))
+            ->assertForbidden();
+
+        $this->assertSame(BookingStatus::AwaitingCustomerApproval, $booking->refresh()->status);
+    }
+
+    public function test_proposed_repairs_are_visible_once_awaiting_approval(): void
+    {
+        $customer = User::factory()->create();
+        $booking = $this->bookingAwaitingApproval($customer);
+
+        $this->actingAs($customer)
+            ->get(route('customer.repairs.show', $booking))
+            ->assertSee('Replace brake pads')
+            ->assertSee('Approve');
+    }
 }

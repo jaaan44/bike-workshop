@@ -23,6 +23,18 @@
         <div class="mb-4 rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700">Repair item marked done.</div>
     @elseif (session('status') === 'note-added')
         <div class="mb-4 rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700">Note added.</div>
+    @elseif (session('status') === 'approval-requested')
+        <div class="mb-4 rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700">Sent to the customer for approval.</div>
+    @elseif (session('status') === 'repairs-completed')
+        <div class="mb-4 rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700">Repairs marked complete.</div>
+    @elseif (session('status') === 'quality-check-started')
+        <div class="mb-4 rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700">Quality check started.</div>
+    @elseif (session('status') === 'quality-check-passed')
+        <div class="mb-4 rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700">Quality check passed.</div>
+    @elseif (session('status') === 'quality-check-failed')
+        <div class="mb-4 rounded-lg bg-gray-50 border border-gray-200 px-4 py-3 text-sm text-gray-700">Quality check failed &mdash; sent back for rework.</div>
+    @elseif (session('status') === 'booking-completed')
+        <div class="mb-4 rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700">Booking marked as completed.</div>
     @endif
 
     @if (session('error'))
@@ -85,6 +97,61 @@
                 @csrf
                 <button type="submit" class="w-full rounded-lg bg-indigo-600 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
                     Receive Bicycle
+                </button>
+            </form>
+        @elseif ($booking->status === \App\Enums\BookingStatus::Inspection)
+            <form method="POST" action="{{ route('staff.bookings.approval.request', $booking) }}">
+                @csrf
+                <button type="submit" class="w-full rounded-lg bg-indigo-600 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
+                    Send for Customer Approval
+                </button>
+            </form>
+        @elseif ($booking->status === \App\Enums\BookingStatus::AwaitingCustomerApproval)
+            <div class="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-700">
+                Waiting on the customer to approve the proposed repairs.
+            </div>
+        @elseif ($booking->status === \App\Enums\BookingStatus::RepairInProgress)
+            <form method="POST" action="{{ route('staff.bookings.repairs.complete', $booking) }}">
+                @csrf
+                <button type="submit" class="w-full rounded-lg bg-indigo-600 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
+                    Mark Repairs Completed
+                </button>
+            </form>
+        @elseif ($booking->status === \App\Enums\BookingStatus::RepairCompleted)
+            <form method="POST" action="{{ route('staff.bookings.quality-check.start', $booking) }}">
+                @csrf
+                <button type="submit" class="w-full rounded-lg bg-indigo-600 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
+                    Start Quality Check
+                </button>
+            </form>
+        @elseif ($booking->status === \App\Enums\BookingStatus::QualityCheck)
+            <div class="grid grid-cols-2 gap-2">
+                <form method="POST" action="{{ route('staff.bookings.quality-check.pass', $booking) }}">
+                    @csrf
+                    <input type="hidden" name="fulfillment_method" value="pickup">
+                    <button type="submit" class="w-full rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
+                        Pass &rarr; Ready for Pickup
+                    </button>
+                </form>
+                <form method="POST" action="{{ route('staff.bookings.quality-check.pass', $booking) }}">
+                    @csrf
+                    <input type="hidden" name="fulfillment_method" value="delivery">
+                    <button type="submit" class="w-full rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
+                        Pass &rarr; Ready for Delivery
+                    </button>
+                </form>
+            </div>
+            <form method="POST" action="{{ route('staff.bookings.quality-check.fail', $booking) }}">
+                @csrf
+                <button type="submit" class="w-full rounded-lg bg-white px-5 py-3 text-sm font-semibold text-red-600 border border-gray-300 hover:bg-gray-50">
+                    Fail &mdash; Send Back for Rework
+                </button>
+            </form>
+        @elseif (in_array($booking->status, [\App\Enums\BookingStatus::ReadyForPickup, \App\Enums\BookingStatus::ReadyForDelivery], true))
+            <form method="POST" action="{{ route('staff.bookings.fulfill', $booking) }}">
+                @csrf
+                <button type="submit" class="w-full rounded-lg bg-indigo-600 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
+                    {{ $booking->status === \App\Enums\BookingStatus::ReadyForPickup ? 'Mark as Picked Up' : 'Mark as Delivered' }}
                 </button>
             </form>
         @endif

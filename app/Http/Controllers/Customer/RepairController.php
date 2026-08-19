@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Customer;
 
+use App\Enums\BookingStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\BookingRequest;
 use App\Models\BicyclePartCategory;
@@ -46,7 +47,33 @@ class RepairController extends Controller
         $this->authorize('view', $booking);
 
         return view('customer.repairs.show', [
-            'booking' => $booking->load(['bicycle', 'bicycleParts.bicyclePartCategory']),
+            'booking' => $booking->load(['bicycle', 'bicycleParts.bicyclePartCategory', 'inspection', 'repairItems']),
         ]);
+    }
+
+    public function approve(Booking $booking): RedirectResponse
+    {
+        $this->authorize('view', $booking);
+
+        if ($booking->status !== BookingStatus::AwaitingCustomerApproval) {
+            return back()->with('error', 'This booking is not awaiting your approval.');
+        }
+
+        $booking->transitionTo(BookingStatus::RepairInProgress);
+
+        return back()->with('status', 'repair-approved');
+    }
+
+    public function decline(Booking $booking): RedirectResponse
+    {
+        $this->authorize('view', $booking);
+
+        if ($booking->status !== BookingStatus::AwaitingCustomerApproval) {
+            return back()->with('error', 'This booking is not awaiting your approval.');
+        }
+
+        $booking->transitionTo(BookingStatus::Inspection);
+
+        return back()->with('status', 'repair-declined');
     }
 }

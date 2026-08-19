@@ -40,6 +40,8 @@ Route::middleware(['auth', 'role:customer'])->prefix('customer')->name('customer
     Route::get('/repairs/create', [RepairController::class, 'create'])->name('repairs.create');
     Route::post('/repairs', [RepairController::class, 'store'])->name('repairs.store');
     Route::get('/repairs/{booking}', [RepairController::class, 'show'])->name('repairs.show');
+    Route::post('/repairs/{booking}/approve', [RepairController::class, 'approve'])->name('repairs.approve');
+    Route::post('/repairs/{booking}/decline', [RepairController::class, 'decline'])->name('repairs.decline');
 });
 
 Route::middleware(['auth', 'role:staff,technician'])->prefix('staff')->name('staff.')->group(function () {
@@ -54,6 +56,12 @@ Route::middleware(['auth', 'role:staff,technician'])->prefix('staff')->name('sta
     Route::post('/bookings/{booking}/repair-items', [BookingController::class, 'storeRepairItem'])->name('bookings.repair-items.store');
     Route::post('/bookings/{booking}/repair-items/{repairItem}/complete', [BookingController::class, 'completeRepairItem'])->name('bookings.repair-items.complete');
     Route::post('/bookings/{booking}/notes', [BookingController::class, 'storeTechnicianNote'])->name('bookings.notes.store');
+    Route::post('/bookings/{booking}/request-approval', [BookingController::class, 'requestApproval'])->name('bookings.approval.request');
+    Route::post('/bookings/{booking}/repairs/complete', [BookingController::class, 'completeRepairs'])->name('bookings.repairs.complete');
+    Route::post('/bookings/{booking}/quality-check/start', [BookingController::class, 'startQualityCheck'])->name('bookings.quality-check.start');
+    Route::post('/bookings/{booking}/quality-check/pass', [BookingController::class, 'passQualityCheck'])->name('bookings.quality-check.pass');
+    Route::post('/bookings/{booking}/quality-check/fail', [BookingController::class, 'failQualityCheck'])->name('bookings.quality-check.fail');
+    Route::post('/bookings/{booking}/fulfill', [BookingController::class, 'fulfill'])->name('bookings.fulfill');
 
     Route::get('/jobs', [JobController::class, 'index'])->name('jobs.index');
 });
