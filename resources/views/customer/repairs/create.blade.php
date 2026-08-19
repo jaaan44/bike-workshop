@@ -105,7 +105,7 @@
                         <template x-for="part in partsForActiveCategory" :key="part.id">
                             <label class="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-4 py-3 cursor-pointer">
                                 <span class="text-sm text-gray-900" x-text="part.name"></span>
-                                <input type="checkbox" name="bicycle_parts[]" :value="part.id"
+                                <input type="checkbox"
                                     :checked="selectedParts.includes(part.id)" @change="togglePart(part.id)"
                                     class="rounded text-indigo-600 focus:ring-indigo-500">
                             </label>
@@ -115,6 +115,19 @@
                     <p x-show="activeCategory === null" class="text-sm text-gray-400 text-center py-6">
                         Choose a category above to see its parts.
                     </p>
+
+                    <!--
+                        The checkboxes above only exist in the DOM for the
+                        currently active category (x-for over a filtered
+                        list destroys the others), so they can't be relied
+                        on to submit the full selection natively. These
+                        hidden inputs always reflect the complete
+                        selectedParts array regardless of which category
+                        tab is open.
+                    -->
+                    <template x-for="id in selectedParts" :key="id">
+                        <input type="hidden" name="bicycle_parts[]" :value="id">
+                    </template>
 
                     <x-input-error :messages="$errors->get('bicycle_parts')" class="mt-2" />
 
