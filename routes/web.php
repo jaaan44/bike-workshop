@@ -45,6 +45,11 @@ Route::middleware(['auth', 'role:customer'])->prefix('customer')->name('customer
 Route::middleware(['auth', 'role:staff,technician'])->prefix('staff')->name('staff.')->group(function () {
     Route::get('/dashboard', [StaffDashboardController::class, 'index'])->name('dashboard');
     Route::get('/bookings', [BookingController::class, 'index'])->name('bookings.index');
+    Route::get('/bookings/{booking}', [BookingController::class, 'show'])->name('bookings.show');
+    Route::post('/bookings/{booking}/accept', [BookingController::class, 'accept'])->name('bookings.accept');
+    Route::post('/bookings/{booking}/receive', [BookingController::class, 'receive'])->name('bookings.receive');
+    Route::post('/bookings/{booking}/cancel', [BookingController::class, 'cancel'])->name('bookings.cancel');
+
     Route::get('/jobs', [JobController::class, 'index'])->name('jobs.index');
 });
 

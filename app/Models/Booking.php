@@ -8,6 +8,8 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 
 #[Fillable(['bicycle_id', 'remarks', 'appointment_date'])]
@@ -59,6 +61,34 @@ class Booking extends Model
     public function bicycleParts(): BelongsToMany
     {
         return $this->belongsToMany(BicyclePart::class, 'booking_items');
+    }
+
+    /**
+     * @return HasMany<BookingStatusHistory, $this>
+     */
+    public function statusHistories(): HasMany
+    {
+        return $this->hasMany(BookingStatusHistory::class)->latest('id');
+    }
+
+    /**
+     * Update the status and record who changed it, atomically.
+     */
+    public function transitionTo(BookingStatus $status): void
+    {
+        DB::transaction(function () use ($status): void {
+            $this->statusHistories()->create([
+                'old_status' => $this->status,
+                'new_status' => $status,
+                'changed_by' => Auth::id(),
+            ]);
+
+            // status is deliberately excluded from Fillable (it must never
+            // be settable via mass assignment from a request), so it's set
+            // directly here rather than through update().
+            $this->status = $status;
+            $this->save();
+        });
     }
 
     protected function casts(): array
