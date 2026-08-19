@@ -49,6 +49,11 @@ Route::middleware(['auth', 'role:staff,technician'])->prefix('staff')->name('sta
     Route::post('/bookings/{booking}/accept', [BookingController::class, 'accept'])->name('bookings.accept');
     Route::post('/bookings/{booking}/receive', [BookingController::class, 'receive'])->name('bookings.receive');
     Route::post('/bookings/{booking}/cancel', [BookingController::class, 'cancel'])->name('bookings.cancel');
+    Route::put('/bookings/{booking}/technician', [BookingController::class, 'assignTechnician'])->name('bookings.technician.update');
+    Route::put('/bookings/{booking}/inspection', [BookingController::class, 'updateInspection'])->name('bookings.inspection.update');
+    Route::post('/bookings/{booking}/repair-items', [BookingController::class, 'storeRepairItem'])->name('bookings.repair-items.store');
+    Route::post('/bookings/{booking}/repair-items/{repairItem}/complete', [BookingController::class, 'completeRepairItem'])->name('bookings.repair-items.complete');
+    Route::post('/bookings/{booking}/notes', [BookingController::class, 'storeTechnicianNote'])->name('bookings.notes.store');
 
     Route::get('/jobs', [JobController::class, 'index'])->name('jobs.index');
 });

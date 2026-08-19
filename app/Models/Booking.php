@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 
@@ -69,6 +70,38 @@ class Booking extends Model
     public function statusHistories(): HasMany
     {
         return $this->hasMany(BookingStatusHistory::class)->latest('id');
+    }
+
+    /**
+     * @return BelongsTo<User, $this>
+     */
+    public function assignedTechnician(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'assigned_technician_id');
+    }
+
+    /**
+     * @return HasOne<RepairInspection, $this>
+     */
+    public function inspection(): HasOne
+    {
+        return $this->hasOne(RepairInspection::class);
+    }
+
+    /**
+     * @return HasMany<RepairItem, $this>
+     */
+    public function repairItems(): HasMany
+    {
+        return $this->hasMany(RepairItem::class)->oldest('id');
+    }
+
+    /**
+     * @return HasMany<TechnicianNote, $this>
+     */
+    public function technicianNotes(): HasMany
+    {
+        return $this->hasMany(TechnicianNote::class)->latest('id');
     }
 
     /**

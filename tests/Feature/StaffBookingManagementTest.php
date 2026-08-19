@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Enums\BookingStatus;
 use App\Models\Bicycle;
 use App\Models\Booking;
+use App\Models\RepairInspection;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -149,6 +150,157 @@ class StaffBookingManagementTest extends TestCase
 
         $this->actingAs($customer)
             ->post(route('staff.bookings.accept', $booking))
+            ->assertForbidden();
+    }
+
+    public function test_staff_can_assign_a_technician_to_a_booking(): void
+    {
+        $staff = User::factory()->staff()->create();
+        $technician = User::factory()->technician()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::BikeReceived);
+
+        $this->actingAs($staff)
+            ->put(route('staff.bookings.technician.update', $booking), [
+                'assigned_technician_id' => $technician->id,
+            ])
+            ->assertRedirect();
+
+        $this->assertSame($technician->id, $booking->refresh()->assigned_technician_id);
+    }
+
+    public function test_staff_can_unassign_a_technician(): void
+    {
+        $staff = User::factory()->staff()->create();
+        $technician = User::factory()->technician()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::BikeReceived);
+        $booking->forceFill(['assigned_technician_id' => $technician->id])->save();
+
+        $this->actingAs($staff)
+            ->put(route('staff.bookings.technician.update', $booking), [
+                'assigned_technician_id' => '',
+            ])
+            ->assertRedirect();
+
+        $this->assertNull($booking->refresh()->assigned_technician_id);
+    }
+
+    public function test_assigning_a_non_technician_user_is_rejected(): void
+    {
+        $staff = User::factory()->staff()->create();
+        $customer = User::factory()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::BikeReceived);
+
+        $this->actingAs($staff)
+            ->put(route('staff.bookings.technician.update', $booking), [
+                'assigned_technician_id' => $customer->id,
+            ])
+            ->assertSessionHasErrors('assigned_technician_id');
+
+        $this->assertNull($booking->refresh()->assigned_technician_id);
+    }
+
+    public function test_staff_can_save_inspection_findings_and_it_transitions_the_booking(): void
+    {
+        $staff = User::factory()->staff()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::BikeReceived);
+
+        $this->actingAs($staff)
+            ->put(route('staff.bookings.inspection.update', $booking), [
+                'findings' => 'Worn brake pads, loose headset.',
+                'recommended_repairs' => 'Replace brake pads, adjust headset.',
+            ])
+            ->assertRedirect();
+
+        $booking->refresh();
+        $this->assertSame(BookingStatus::Inspection, $booking->status);
+        $this->assertSame('Worn brake pads, loose headset.', $booking->inspection->findings);
+        $this->assertSame('Replace brake pads, adjust headset.', $booking->inspection->recommended_repairs);
+        $this->assertSame($staff->id, $booking->inspection->inspected_by);
+    }
+
+    public function test_saving_inspection_again_updates_the_same_record_without_retransitioning(): void
+    {
+        $staff = User::factory()->staff()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::Inspection);
+        $booking->inspection()->create(['findings' => 'Initial findings']);
+
+        $this->actingAs($staff)->put(route('staff.bookings.inspection.update', $booking), [
+            'findings' => 'Updated findings',
+            'recommended_repairs' => null,
+        ]);
+
+        $booking->refresh();
+        $this->assertSame(BookingStatus::Inspection, $booking->status);
+        $this->assertSame(1, RepairInspection::where('booking_id', $booking->id)->count());
+        $this->assertSame('Updated findings', $booking->inspection->findings);
+    }
+
+    public function test_staff_can_add_and_complete_repair_items(): void
+    {
+        $staff = User::factory()->staff()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::Inspection);
+
+        $this->actingAs($staff)
+            ->post(route('staff.bookings.repair-items.store', $booking), [
+                'description' => 'Replace brake pads',
+            ])
+            ->assertRedirect();
+
+        $item = $booking->repairItems()->sole();
+        $this->assertSame('Replace brake pads', $item->description);
+        $this->assertSame($staff->id, $item->added_by);
+        $this->assertFalse($item->isCompleted());
+
+        $this->actingAs($staff)
+            ->post(route('staff.bookings.repair-items.complete', [$booking, $item]))
+            ->assertRedirect();
+
+        $this->assertTrue($item->refresh()->isCompleted());
+    }
+
+    public function test_completing_a_repair_item_from_a_different_booking_is_rejected(): void
+    {
+        $staff = User::factory()->staff()->create();
+        $bookingA = $this->bookingFor(User::factory()->create(), BookingStatus::Inspection);
+        $bookingB = $this->bookingFor(User::factory()->create(), BookingStatus::Inspection);
+        $item = $bookingB->repairItems()->create(['description' => 'Adjust gears']);
+
+        $this->actingAs($staff)
+            ->post(route('staff.bookings.repair-items.complete', [$bookingA, $item]))
+            ->assertNotFound();
+    }
+
+    public function test_staff_can_add_a_technician_note(): void
+    {
+        $technician = User::factory()->technician()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::RepairInProgress);
+
+        $this->actingAs($technician)
+            ->post(route('staff.bookings.notes.store', $booking), [
+                'note' => 'Needs a part ordered from the supplier.',
+            ])
+            ->assertRedirect();
+
+        $note = $booking->technicianNotes()->sole();
+        $this->assertSame('Needs a part ordered from the supplier.', $note->note);
+        $this->assertSame($technician->id, $note->user_id);
+    }
+
+    public function test_customer_cannot_manage_repair_job_details(): void
+    {
+        $customer = User::factory()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::BikeReceived);
+
+        $this->actingAs($customer)
+            ->put(route('staff.bookings.inspection.update', $booking), ['findings' => 'x'])
+            ->assertForbidden();
+
+        $this->actingAs($customer)
+            ->post(route('staff.bookings.repair-items.store', $booking), ['description' => 'x'])
+            ->assertForbidden();
+
+        $this->actingAs($customer)
+            ->post(route('staff.bookings.notes.store', $booking), ['note' => 'x'])
             ->assertForbidden();
     }
 }
