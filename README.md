@@ -51,4 +51,9 @@ php artisan test
 
 ## Project status
 
-See the module-by-module build log in conversation history. Currently implemented: authentication, roles, mobile-first layout with role-aware bottom navigation, and placeholder customer/staff navigation screens. Bicycle registration, booking, and the repair workflow are not yet built.
+The full customer + staff repair workflow is implemented end-to-end — registration through bicycle management, repair booking, staff booking review, inspection, technician assignment, repair items, quality check, and completion. For the current, accurate state of the project (what's implemented, what isn't, known issues, and recommended next steps), see:
+
+- **[docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md)** — full feature-by-feature audit, this is the primary status document
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — application structure, models, request flow, repair-workflow state machine (with diagrams)
+- **[docs/DATABASE.md](docs/DATABASE.md)** — schema and ER diagram
+- **[docs/HANDOFF.md](docs/HANDOFF.md)** — short "start here" briefing for picking up development, suitable to hand to another developer or AI session
