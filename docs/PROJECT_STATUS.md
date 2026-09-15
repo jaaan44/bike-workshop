@@ -31,7 +31,7 @@ Versions below were confirmed by running the actual tools in this environment, n
 | Tailwind CSS | **3.4.19** (actually installed/used) | See discrepancy note below |
 | Alpine.js | ^3.4.2 | |
 | Vite | ^8.0.0 (via `laravel-vite-plugin` ^3.1) | |
-| Database | MySQL 8.4 (Codespaces/devcontainer), SQLite (used only for isolated local test runs) | |
+| Database | MySQL 8.4 (via Docker Compose), SQLite (used only for isolated local test runs) | |
 | Test runner | PHPUnit ^12.5.12 via `php artisan test` | |
 | Code style | Laravel Pint ^1.27 | |
 
@@ -41,27 +41,31 @@ Versions below were confirmed by running the actual tools in this environment, n
 
 ## 3. Development Environment
 
-### Devcontainer (`.devcontainer/`)
+**Updated since the original audit above:** the project is now Dockerized with one canonical Compose setup, and the shared VPS is its primary target — local development uses the exact same setup. There is no GitHub Codespaces/devcontainer support (deliberately removed, not a gap). This superseded the devcontainer-only setup and the stale root `compose.yaml` described in the original audit findings (§17.3–17.4 below are now resolved; left in place as a historical record of what was found and fixed).
 
-- `devcontainer.json`: two services via `docker-compose.yml` — `app` (`mcr.microsoft.com/devcontainers/php:1-8.4-bookworm`, no custom image build) and `mysql` (`mysql:8.4`). Node 22 is added via a devcontainer feature. Ports 8000 (App), 5173 (Vite), 3306 (MySQL) are forwarded.
-- `postCreateCommand` (runs once per container build) does, in order: enable `pdo_mysql`, `composer install`, `npm install`, `npm run build`, copy `.env.example` → `.env` if missing, `php artisan key:generate`, wait for MySQL to accept TCP connections (polling loop, up to 60s), then `php artisan migrate --graceful --seed`.
-- **There is no `postStartCommand` or `postAttachCommand`.** The Laravel dev server (`php artisan serve`) and Vite dev server (`npm run dev`) are **not** started automatically — this must be done manually after the container is ready (see README / HANDOFF for the exact commands). This was a known pain point during earlier development and remains true today: automatic migration/seeding on container creation is handled, but the two dev servers are not auto-started.
+### `compose.yaml` (repository root) — the one supported Docker workflow
 
-### Root-level `compose.yaml`
+Two services by default, both purpose-built for this project (no Laravel Sail):
+- **`app`** — built from the root `Dockerfile` (PHP 8.4 + Apache on Debian bookworm). Apache serves Laravel's `public/` directly on container port 80; the host-side port is configurable (`APP_PORT`, default `8013`) and is never hardcoded inside the container or the app itself. Frontend assets (`npm run build`) are compiled into the image at build time, so the runtime container never needs Node/Vite to serve the app. The full repo is bind-mounted for live editing, with `vendor/` and `public/build` each shadowed by a dedicated named volume (`bicycle_workshop_vendor`, `bicycle_workshop_build`) so the image's build output survives the bind mount instead of being hidden by an empty/stale host directory.
+- **`mysql`** — official `mysql:8.4` image, host port configurable (`DB_FORWARD_PORT`, default `3348`), persisted to a project-specific named volume (`bicycle_workshop_mysql_data`), with a healthcheck that `depends_on: condition: service_healthy` waits on before starting `app`.
+- **`vite`** (optional) — same image, running `npm run dev` instead of Apache, for hot-reload during active frontend work. Gated behind a Compose `profiles: ["dev"]` entry, so it is never started by a plain `docker compose up -d`. Started explicitly with `docker compose --profile dev up -d vite`.
 
-A separate, **unused** Laravel Sail-style `compose.yaml` exists at the repository root (references `./vendor/laravel/sail/...` build context). This is a leftover from the initial `laravel new` scaffold. The actual Codespaces workflow uses `.devcontainer/docker-compose.yml` instead, which was specifically written to avoid Sail's build-time dependency on `vendor/` already existing (a chicken-and-egg problem documented in an early fix commit). `compose.yaml` is harmless but dead configuration — see Technical Debt.
+All container names, volume names, and the network name are explicitly prefixed `bicycle_workshop_` to avoid collisions with other projects sharing the same VPS (it runs at least two other applications: Pickleverse and Company App). No host networking is used anywhere in the stack.
+
+`docker/entrypoint.sh` runs on every `app`/`vite` container start (not just first creation): creates `.env` from `.env.example` if missing, runs `composer install`/`npm run build` as a fallback safety net if the named volumes are somehow empty, generates `APP_KEY` if missing, fixes `storage`/`bootstrap/cache` ownership, waits for MySQL to accept TCP connections, then runs `php artisan migrate --force` (forward-only, never destructive) before handing off to Apache. Seeding is **not** run automatically — `DB_SEED_ON_BOOT=true` in `.env` opts in (intended for throwaway local databases only); the existing seeders are all existence-checked/`updateOrCreate`, so running `php artisan db:seed` manually at any time is safe to repeat.
 
 ### `.env.example`
 
-Configured for the devcontainer's MySQL service: `DB_CONNECTION=mysql`, `DB_HOST=mysql`, `DB_DATABASE=bike_workshop`, `DB_USERNAME=sail`, `DB_PASSWORD=password`. Session/cache/queue all default to the `database` driver. Mail defaults to `log`.
+Same MySQL application config as before (`DB_CONNECTION=mysql`, `DB_HOST=mysql`, `DB_PORT=3306`, `DB_DATABASE=bike_workshop`, `DB_USERNAME=sail`, `DB_PASSWORD=password` — unchanged, and must stay `mysql:3306` since that's the Docker-network hostname, not a host-facing port). Also: `APP_PORT=8013`, `DB_FORWARD_PORT=3348`, `VITE_FORWARD_PORT=5175` (host-side Docker port mappings, read by Compose's own `${VAR:-default}` substitution from this same file — not read by Laravel) and `DB_SEED_ON_BOOT=false`. `APP_URL` is a plain literal (`http://localhost:8013`) rather than an interpolated `${APP_PORT}` reference — confirmed during this work that phpdotenv only resolves `${VAR}` interpolation against variables already defined *earlier* in the file, and `APP_PORT` is defined further down (next to the other Docker-only settings), so the interpolated form silently produced `http://localhost:` with nothing after the colon.
 
-### Startup procedure (Codespaces) — confirmed accurate
+### Startup procedure — confirmed accurate
 
-1. Open the repo in a Codespace — the devcontainer builds and `postCreateCommand` runs automatically (installs dependencies, builds assets, migrates + seeds).
-2. In a terminal: `php artisan serve --host=0.0.0.0 --port=8000` (forwarded automatically).
-3. In a second terminal: `npm run dev` (for Vite/Tailwind hot reload during active frontend work — not required just to view the already-built assets from step 1).
-
-This sandbox environment (used for this audit) has no reachable MySQL host, so migration/DB commands here were run against a temporary local SQLite database and the `.env` was restored to its MySQL configuration afterward. No project files were left modified by this process.
+```bash
+cp .env.example .env    # first time only
+docker compose build
+docker compose up -d
+```
+Confirmed via `docker compose config` (valid) in this audit environment. **`docker compose build`/`up` could not be executed end-to-end in this specific sandboxed audit environment** — its egress policy blocks Docker Hub image pulls entirely (`php`, `mysql`, `composer`, even `alpine` all rejected with a policy-level 403 on `production.cloudfront.docker.com`, confirmed both via a plain `docker pull` and via `docker compose build`). This is an environment restriction, not a defect in the Compose/Dockerfile setup — the real VPS has normal internet access and is expected to pull these images without issue. The compose file, Dockerfile, and entrypoint were reviewed line-by-line and validated with every check that doesn't require a registry (`docker compose config`, plus re-running the full native test suite, Pint, and `npm run build` outside Docker to confirm nothing in the application itself was affected). Whoever next has a working Docker daemon with normal internet access should run through steps 2–13 of the standard verification checklist (`docker compose build`, `up`, `ps`, a `curl` against port 8013, `ss`/`netstat` against port 3348, `exec ... php artisan migrate:status`, `exec ... php artisan test`, `exec ... npm run build`, `exec ... pint`, a `down`/`up` restart check, and a log-tail check) before this is considered fully verified end-to-end.
 
 ---
 
@@ -82,7 +86,7 @@ Laravel Breeze (Blade stack) is installed and in active use, lightly customized.
 - **Password confirmation**: Breeze's `confirm-password` flow present, with tests.
 - **Email verification**: the routes and controllers (`EmailVerificationPromptController`, `VerifyEmailController`, `EmailVerificationNotificationController`) exist from the Breeze scaffold and are tested (`tests/Feature/Auth/EmailVerificationTest.php`), **but verification is not actually enforced anywhere in the application.** `App\Models\User` has the `MustVerifyEmail` import commented out and does **not** implement that interface, and no route group in `routes/web.php` applies Laravel's `verified` middleware. In practice, a newly registered user can use the full application immediately with an unverified email. This is dead-but-present scaffolding, not a bug in the strict sense, but worth flagging (see Security Observations).
 - **Session-based auth**: `SESSION_DRIVER=database` (per `.env.example`); standard `auth` middleware guards all authenticated routes.
-- **Reverse proxy trust**: `bootstrap/app.php` calls `$middleware->trustProxies(at: '*')` so `asset()`/`url()` generate correct public URLs behind Codespaces' proxy — this was a fix for a real bug encountered early in development (assets/CSRF pointed at `localhost:8000` instead of the public Codespaces host).
+- **Reverse proxy trust**: `bootstrap/app.php` calls `$middleware->trustProxies(at: '*')` so `asset()`/`url()` generate correct public URLs behind a reverse proxy — originally fixed for a real bug when the project ran under GitHub Codespaces' proxy (assets/CSRF pointed at `localhost:8000` instead of the public host), and equally relevant now on the VPS if any reverse proxy (Nginx, a load balancer, etc.) sits in front of the `app` container's published port.
 
 ---
 
@@ -332,9 +336,9 @@ Breakdown by file:
 1. **Staff dashboard stat tiles are partially hardcoded.** `resources/views/staff/dashboard.blade.php` has four stat tiles — "Awaiting Approval", "Quality Check", "In Repair", "Ready" — that are hardcoded to the literal string `0` in the Blade template rather than being passed from `Staff\DashboardController::index()`. That controller only computes counts for `Pending`, `Accepted`, and `BikeReceived`. This means the dashboard has not been updated since Phase 4 despite Phases 5 and 6 adding five more statuses to the workflow — it currently under-reports the real state of the shop's work whenever any booking is in `awaiting_customer_approval`, `repair_in_progress`, `quality_check`, `ready_for_pickup`, or `ready_for_delivery`.
 2. **`scheduled` status is dead code** — defined, styled, never set (§15).
 3. **README's "Project status" section is stale.** It currently states "Bicycle registration, booking, and the repair workflow are not yet built," which was true when it was written (end of Phase 1) but has been false since Phase 2. This audit's documentation (and the README update made alongside it) corrects this.
-4. **Root-level `compose.yaml`** (Sail) is unused dead configuration — the devcontainer uses its own `docker-compose.yml` instead (see §3). Not harmful, but could confuse a future developer into thinking Sail is the supported local-dev path.
-5. **`@tailwindcss/vite` v4 package listed but unused** (§2) — cosmetic `package.json` inconsistency, no functional effect.
-6. Dev servers (`php artisan serve`, `npm run dev`) are not auto-started on container creation (§3) — this is documented behavior, not a bug, but worth knowing before assuming "the app is running" right after a Codespace opens.
+4. ~~Root-level `compose.yaml` (Sail) is unused dead configuration~~ — **resolved**: `compose.yaml` is now the project's single canonical Docker Compose setup (see updated §3); the stale Sail version it used to contain is gone.
+5. **`@tailwindcss/vite` v4 package listed but unused** (§2) — cosmetic `package.json` inconsistency, no functional effect. Still present; out of scope for the Docker work.
+6. ~~Dev servers (`php artisan serve`, `npm run dev`) are not auto-started on container creation~~ — **resolved**: `docker compose up -d` now starts Apache automatically inside the `app` container; neither command needs to be run by hand anymore (see updated §3).
 
 No data-loss, broken-migration, or failing-test issues were found.
 
@@ -348,7 +352,7 @@ Light review only — not a full security audit. No high-severity issues found.
 - **Mass-assignment protection is deliberately used as a security boundary**, not just a convenience: `status`, `assigned_technician_id`, and `completed_at` are excluded from their models' `#[Fillable]` lists specifically so a crafted request body can't set them directly through `update()`/`create()`. Every write path for these fields was checked and uses direct property assignment instead.
 - **Technician assignment is validated server-side** against the `technician` role (`Rule::exists('users', 'id')->where('role', UserRole::Technician->value)`), not just filtered in the UI — confirmed by a passing test that a non-technician user ID is rejected.
 - **CSRF**: standard Laravel CSRF middleware applies to all state-changing routes; every form in every Blade view checked includes `@csrf`.
-- **No admin/debug routes are exposed.** `APP_DEBUG=true` in `.env.example` is standard for local/Codespaces dev; nothing in this audit suggests it's set that way in any production-like context (none exists yet).
+- **No admin/debug routes are exposed.** `APP_DEBUG=true` in `.env.example` is standard for local dev; this must be set to `false` in the real `.env` used on the VPS (not committed — see `.env.example`'s own guidance) since APP_DEBUG=true on a production-facing deployment leaks stack traces/config to visitors.
 - **No secrets are committed.** `.env` is gitignored and confirmed absent from git history (`git log --all --diff-filter=A --name-only` shows no `.env` was ever added).
 - **Staff/technician actions have no per-user restriction** (§6/§13) — any staff or technician can act on any booking, including one assigned to a different technician. This is a documented design choice for the "first release," not an oversight, but it does mean there's currently no way to restrict a technician to only their own assigned jobs at the authorization layer (only UI sort-order nudges toward it).
 - **Email verification is scaffolded but not enforced** (§5) — not a vulnerability per se (nothing sensitive is gated on it), but worth knowing if a future requirement assumes verified emails.
@@ -368,8 +372,9 @@ Light review only — not a full security audit. No high-severity issues found.
 - Status-transition guards are duplicated `if ($booking->status !== X)` checks scattered across two controllers rather than a single declarative transition table — works correctly today (every transition is tested) but makes it easy to introduce an inconsistency if a new transition is added without checking every existing guard.
 
 **Low Priority**
-- Root `compose.yaml` (Sail) and the unused `@tailwindcss/vite` dependency are dead but harmless.
+- The unused `@tailwindcss/vite` dependency is dead but harmless (root `compose.yaml` is no longer dead — see §17.4).
 - `scheduled` booking status is unused.
+- The named-volume-over-bind-mount pattern used for `vendor/` and `public/build` in `compose.yaml` means an image rebuild is required after changing `composer.json`/`composer.lock` or frontend source for those changes to actually take effect in a running container — a normal Docker tradeoff, but worth knowing (`docker compose build app && docker compose up -d` covers it).
 - No repository/service layer — all business logic lives directly in controllers and the `Booking` model. This has not caused a problem yet (controllers stay small and single-purpose), but is worth watching as more workflow phases are added.
 - README's project-status blurb needed updating (fixed alongside this audit).
 

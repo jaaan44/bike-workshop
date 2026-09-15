@@ -1,56 +1,118 @@
+# Bicycle Workshop — canonical Docker Compose setup.
+#
+# This is the ONE supported Docker workflow for this project, and the VPS
+# is its primary target — the same file also works for local development.
+# There is no GitHub Codespaces/devcontainer support; this project is
+# developed and run directly against Docker.
+#
+# Usage:
+#   docker compose build            # build/rebuild the app image
+#   docker compose up -d            # app + mysql (what you want 95% of the time)
+#   docker compose --profile dev up -d vite   # optional: also start the Vite dev server
+#   docker compose down             # stop everything
+#   docker compose logs -f          # tail logs
+#
+# Host ports are configurable via .env (see .env.example) so this can run
+# alongside other projects on the same VPS without collisions:
+#   APP_PORT=8013          browser -> http://127.0.0.1:8013 -> app container :80
+#   DB_FORWARD_PORT=3348   host MySQL client -> 127.0.0.1:3348 -> mysql container :3306
+#   VITE_FORWARD_PORT=5175 (only relevant if the optional `vite` service is started)
+#
+# Inside the Docker network, Laravel always talks to MySQL as `mysql:3306`
+# — the host-side port mapping above is irrelevant from inside the app
+# container and must not be used for DB_HOST/DB_PORT.
+#
+# Shared-VPS safety: every container name, volume name, and the network
+# name below are prefixed `bicycle_workshop_` specifically so this project
+# never collides with other applications (e.g. Pickleverse, Company App)
+# running on the same Docker host. Never run `docker compose down -v`
+# unless you explicitly intend to delete this project's MySQL data volume
+# — it does not touch other projects' volumes either way.
+
 services:
-    laravel.test:
-        build:
-            context: ./vendor/laravel/sail/runtimes/8.5
-            dockerfile: Dockerfile
-            args:
-                WWWGROUP: '${WWWGROUP}'
-        image: sail-8.5/app
-        extra_hosts:
-            - 'host.docker.internal:host-gateway'
-        ports:
-            - '${APP_PORT:-80}:80'
-            - '${VITE_PORT:-5173}:${VITE_PORT:-5173}'
-        environment:
-            WWWUSER: '${WWWUSER}'
-            LARAVEL_SAIL: 1
-            XDEBUG_MODE: '${SAIL_XDEBUG_MODE:-off}'
-            XDEBUG_CONFIG: '${SAIL_XDEBUG_CONFIG:-client_host=host.docker.internal}'
-            IGNITION_LOCAL_SITES_PATH: '${PWD}'
-        volumes:
-            - '.:/var/www/html'
-        networks:
-            - sail
-        depends_on:
-            - mysql
-    mysql:
-        image: 'mysql:8.4'
-        ports:
-            - '${FORWARD_DB_PORT:-3306}:3306'
-        environment:
-            MYSQL_ROOT_PASSWORD: '${DB_PASSWORD}'
-            MYSQL_ROOT_HOST: '%'
-            MYSQL_DATABASE: '${DB_DATABASE}'
-            MYSQL_USER: '${DB_USERNAME}'
-            MYSQL_PASSWORD: '${DB_PASSWORD}'
-            MYSQL_ALLOW_EMPTY_PASSWORD: 1
-            MYSQL_EXTRA_OPTIONS: '${MYSQL_EXTRA_OPTIONS:-}'
-        volumes:
-            - 'sail-mysql:/var/lib/mysql'
-            - './vendor/laravel/sail/database/mysql/create-testing-database.sh:/docker-entrypoint-initdb.d/10-create-testing-database.sh'
-        networks:
-            - sail
-        healthcheck:
-            test:
-                - CMD
-                - mysqladmin
-                - ping
-                - '-p${DB_PASSWORD}'
-            retries: 3
-            timeout: 5s
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: bicycle_workshop_app
+    container_name: bicycle_workshop_app
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8013}:80"
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+    volumes:
+      - .:/var/www/html
+      # Bind-mounting the full repo above would otherwise hide the vendor/
+      # and public/build trees baked into the image at build time (a bare
+      # host checkout has neither until you run composer/npm yourself).
+      # Named volumes mounted at these specific subpaths take precedence
+      # over the parent bind mount, and Docker seeds a named volume from
+      # the image's own content the first time it's used — so these
+      # transparently keep the image's build output in place.
+      - bicycle_workshop_vendor:/var/www/html/vendor
+      - bicycle_workshop_build:/var/www/html/public/build
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - bicycle_workshop
+
+  mysql:
+    image: mysql:8.4
+    container_name: bicycle_workshop_mysql
+    restart: unless-stopped
+    ports:
+      - "${DB_FORWARD_PORT:-3348}:3306"
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE:-bike_workshop}
+      MYSQL_USER: ${DB_USERNAME:-sail}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-password}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-password}
+    volumes:
+      - bicycle_workshop_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - bicycle_workshop
+
+  # Optional, dev-only Vite server with hot module reload. Never starts
+  # with a plain `docker compose up` — only via `--profile dev` — so the
+  # VPS/production runtime never runs it; production always serves the
+  # assets built into the image at `docker compose build` time instead.
+  vite:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: bicycle_workshop_app
+    container_name: bicycle_workshop_vite
+    profiles: ["dev"]
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "${VITE_FORWARD_PORT:-5175}:5173"
+    volumes:
+      - .:/var/www/html
+      # node_modules gets its own volume for the same reason vendor/ does
+      # above, plus it avoids mounting host-installed native npm binaries
+      # (a different OS/arch than the container) into the container.
+      - bicycle_workshop_node_modules:/var/www/html/node_modules
+    networks:
+      - bicycle_workshop
+
 networks:
-    sail:
-        driver: bridge
+  bicycle_workshop:
+    name: bicycle_workshop_network
+
 volumes:
-    sail-mysql:
-        driver: local
+  bicycle_workshop_mysql_data:
+    name: bicycle_workshop_mysql_data
+  bicycle_workshop_vendor:
+    name: bicycle_workshop_vendor
+  bicycle_workshop_build:
+    name: bicycle_workshop_build
+  bicycle_workshop_node_modules:
+    name: bicycle_workshop_node_modules

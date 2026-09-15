@@ -2,7 +2,7 @@
 
 Derived directly from the 15 migration files in `database/migrations/` (3 Laravel framework migrations + 12 application migrations) and confirmed by running `php artisan migrate:fresh` end-to-end against a disposable SQLite database during this audit — all 15 ran cleanly, no conflicts, no obsolete/duplicated migrations found.
 
-All tables use MySQL (in the real Codespaces environment) via Laravel's default `bigint unsigned auto_increment` primary key (`$table->id()`) and `timestamps()` (`created_at`/`updated_at`) unless noted otherwise.
+All tables use MySQL (via the project's Docker Compose setup — see `docs/PROJECT_STATUS.md` §3) via Laravel's default `bigint unsigned auto_increment` primary key (`$table->id()`) and `timestamps()` (`created_at`/`updated_at`) unless noted otherwise.
 
 ---
 

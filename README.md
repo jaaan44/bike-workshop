@@ -4,28 +4,51 @@ A mobile-first bicycle repair shop management app. Customers register bikes, boo
 
 Stack: Laravel 13 + Blade + Tailwind CSS + Alpine.js (via Laravel Breeze), MySQL.
 
-## Setup (GitHub Codespaces)
+## Setup (Docker — the supported workflow, VPS or local)
 
-This repo includes a `.devcontainer` (a plain PHP 8.4 + Node container alongside a MySQL 8.4 service — no custom image build, so it works on first Codespace creation without `vendor/` needing to exist yet). Opening the repo in Codespaces provisions both containers and automatically runs `composer install`, `npm install`, `.env` setup, `key:generate`, and `migrate --seed`.
-
-Once the container is ready, start the app:
+This project is developed and deployed as a Docker Compose stack (`compose.yaml` at the repo root). One `app` container (PHP 8.4 + Apache, serving on port 80 internally) and one `mysql` container (MySQL 8.4). There is no separate Sail setup, no devcontainer, and no GitHub Codespaces support — local development and the VPS both use this exact same workflow.
 
 ```bash
-php artisan serve --host=0.0.0.0 --port=8000   # forwarded automatically in Codespaces
-npm run dev                                     # in a second terminal, for Vite/Tailwind hot reload
+cp .env.example .env      # first time only — defaults already work as-is
+docker compose build
+docker compose up -d
 ```
 
-### Manual setup (if not using the devcontainer)
+That's it — the app container's entrypoint automatically installs Composer/npm dependencies if needed, generates `APP_KEY` if missing, waits for MySQL, and runs `php artisan migrate --force` on every start (safe/forward-only, never destructive). **You do not need to run `php artisan serve` or `npm run dev`** — Apache starts automatically inside the container and serves the app the whole time it's running.
+
+- App: **http://127.0.0.1:8013**
+- MySQL (from the host, e.g. a GUI client): **127.0.0.1:3348** — inside Docker the app always reaches it as `mysql:3306`, regardless of this host-side port
+- Rebuild after changing `composer.json`/`composer.lock` or frontend source (`resources/`): `docker compose build`
+- Stop: `docker compose down` (never `docker compose down -v` unless you explicitly want to delete this project's MySQL data volume)
+- Logs: `docker compose logs -f`
+- Run any Artisan command: `docker compose exec app php artisan ...`
+- Demo data isn't seeded automatically (see below) — run it once: `docker compose exec app php artisan db:seed`
+
+Ports are configurable via `.env` (`APP_PORT`, `DB_FORWARD_PORT`, `VITE_FORWARD_PORT` — see `.env.example`) in case 8013/3348/5175 collide with something else already running on the host.
+
+**Shared-host safety:** every container, volume, and network name in `compose.yaml` is prefixed `bicycle_workshop_` and this stack never uses host networking — safe to run alongside other unrelated projects on the same machine without touching their containers, volumes, or ports.
+
+### Frontend hot-reload (optional)
+
+Assets are built into the image at `docker compose build` time — a plain `docker compose up -d` never needs Node or Vite running. If you're actively editing Blade/CSS/JS and want Vite's hot reload, start the optional `vite` service explicitly:
+
+```bash
+docker compose --profile dev up -d vite   # http://127.0.0.1:5175
+```
+
+It never starts on its own and is not part of the default `docker compose up -d`.
+
+### Without Docker
+
+Not the supported path, but works if you have PHP 8.4, Composer, Node 22, and a MySQL 8.4 server available locally:
 
 ```bash
 composer install
 cp .env.example .env
 php artisan key:generate
-
-# Laravel Sail (Docker) is already set up (compose.yaml) if you'd rather
-# run MySQL that way instead of a local/native MySQL install:
-./vendor/bin/sail up -d
-./vendor/bin/sail artisan migrate --seed
+npm install && npm run build
+php artisan migrate --seed
+php artisan serve
 ```
 
 ## Demo accounts
@@ -41,7 +64,8 @@ Seeded by `php artisan db:seed` (password for all: `password`):
 ## Running tests
 
 ```bash
-php artisan test
+docker compose exec app php artisan test
+docker compose exec app ./vendor/bin/pint --dirty   # code style
 ```
 
 ## Roles

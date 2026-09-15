@@ -40,28 +40,34 @@ Phase 6 — the full repair workflow from `inspection` through `completed`, incl
 
 Quick win alongside or before that: fix the hardcoded dashboard tiles (`resources/views/staff/dashboard.blade.php` + `Staff\DashboardController::index()`) — five minutes of work, currently actively misleading.
 
-## How do I start the project in GitHub Codespaces?
+## How do I start the project?
 
-1. Open the repo in a Codespace. The devcontainer (`.devcontainer/`) builds automatically and its `postCreateCommand` runs `composer install`, `npm install`, `npm run build`, `.env` setup, `php artisan key:generate`, waits for MySQL, then `php artisan migrate --seed`. This happens without you doing anything.
-2. **You must start the app server yourself** — nothing auto-starts it:
-   ```bash
-   php artisan serve --host=0.0.0.0 --port=8000
-   ```
-   (Codespaces forwards port 8000 automatically; make sure its visibility is set to Public if you hit a 401.)
-3. Only if you're actively editing CSS/Blade/JS and want hot reload, in a second terminal:
-   ```bash
-   npm run dev
-   ```
-4. Demo accounts (seeded, password `password` for all): `customer@example.com`, `staff@example.com`, `technician@example.com`.
+**The project is Dockerized and the VPS is the primary environment** — there is no GitHub Codespaces/devcontainer support (deliberately removed; don't reintroduce it). Local development uses the exact same `compose.yaml`. See `README.md` for the full writeup; short version:
 
-If MySQL isn't reachable yet right after container creation, give it a few seconds — the `postCreateCommand` itself polls for it before migrating, but a manual `php artisan migrate` retry is safe if needed.
+```bash
+cp .env.example .env   # first time only
+docker compose build
+docker compose up -d
+```
+
+- App: **http://127.0.0.1:8013** (Apache runs *inside* the `app` container on port 80; 8013 is just the host-side mapping — nothing runs `php artisan serve` anywhere in this setup)
+- MySQL from the host: **127.0.0.1:3348**; from inside the app container, always `mysql:3306`
+- Nothing needs to be started manually — the app container's entrypoint (`docker/entrypoint.sh`) installs dependencies if missing, generates `APP_KEY`, waits for MySQL, and runs `php artisan migrate --force` automatically every time it starts
+- Demo accounts are **not** seeded automatically (avoids blindly reseeding a real deployment on every restart) — run once: `docker compose exec app php artisan db:seed`. Password `password` for all three: `customer@example.com`, `staff@example.com`, `technician@example.com`
+- Optional Vite hot-reload (only if you want it): `docker compose --profile dev up -d vite` — never starts on its own, never required
+- Rebuild (`docker compose build`) after changing `composer.json`/`composer.lock` or frontend source — the image bakes those in, and a plain restart won't pick up changes to them
+- Stop: `docker compose down`. Never `docker compose down -v` unless you explicitly want to delete this project's MySQL volume
+- **Shared VPS**: this stack also runs alongside other unrelated apps on the same host — every container/volume/network name is prefixed `bicycle_workshop_`, no host networking is used, and nothing here should ever touch another project's containers, volumes, or ports
+
+If MySQL isn't ready the instant the app container starts, the entrypoint polls for it (up to ~2 minutes) before migrating — this is normal on first boot while MySQL initializes its data directory.
 
 ## How do I run the tests?
 
 ```bash
-php artisan test
+docker compose exec app php artisan test
+docker compose exec app ./vendor/bin/pint --dirty
 ```
-Expected: 82 tests, 0 failures. In a sandboxed/non-Codespaces environment with no MySQL reachable, temporarily point `.env` at SQLite to run tests (back up `.env` first, restore it after — this repo's DB config assumes the devcontainer's MySQL service by default). Don't leave `.env` on SQLite; the real dev/runtime environment is MySQL.
+Expected: 82 tests, 0 failures, Pint clean. Without Docker (native PHP/Composer/Node on the host, no MySQL reachable), temporarily point `.env` at SQLite to run tests — back up `.env` first, restore it after; don't leave it on SQLite, the real runtime is always MySQL.
 
 ## Are there known bugs?
 
@@ -77,3 +83,4 @@ One real one: the staff dashboard's four stat tiles are literally hardcoded to `
 6. **Customer `remarks` (and other customer-reported data) are never overwritten by the workflow** — historical customer input is preserved, not replaced, as staff add their own findings/items/notes alongside it.
 7. **One shared `<x-app-layout>`** for both customer and staff/technician — role-aware only via `<x-bottom-nav>`'s item list, not a separate layout file. Don't fork the layout without a real reason.
 8. Keep using Laravel Pint (`./vendor/bin/pint --dirty`) before committing — the codebase has been kept style-clean throughout.
+9. **`compose.yaml` at the repo root is the one canonical Docker setup, and the VPS is the primary target** — local dev uses the exact same file. There is no devcontainer/Codespaces support; don't reintroduce it, and don't reintroduce a second/conflicting compose file. The `app` service bind-mounts the whole repo but uses named volumes (`bicycle_workshop_vendor`, `bicycle_workshop_build`) to protect `vendor/` and `public/build` from being hidden by that mount — if you add another directory that's built at image-build time and expected to survive the bind mount, it needs the same treatment. The `vite` service only runs via `--profile dev`; never make it part of the default `docker compose up`. Every container/volume/network name is prefixed `bicycle_workshop_` because this stack shares a VPS with other unrelated apps — keep that prefix on anything new.
