@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Customer\BikeController;
 use App\Http\Controllers\Customer\HomeController as CustomerHomeController;
+use App\Http\Controllers\Customer\NotificationController;
 use App\Http\Controllers\Customer\RepairController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\Staff\BookingController;
@@ -42,6 +43,10 @@ Route::middleware(['auth', 'role:customer'])->prefix('customer')->name('customer
     Route::get('/repairs/{booking}', [RepairController::class, 'show'])->name('repairs.show');
     Route::post('/repairs/{booking}/approve', [RepairController::class, 'approve'])->name('repairs.approve');
     Route::post('/repairs/{booking}/decline', [RepairController::class, 'decline'])->name('repairs.decline');
+
+    Route::get('/notifications', [NotificationController::class, 'index'])->name('notifications.index');
+    Route::post('/notifications/read-all', [NotificationController::class, 'readAll'])->name('notifications.read-all');
+    Route::post('/notifications/{notification}/read', [NotificationController::class, 'read'])->name('notifications.read');
 });
 
 Route::middleware(['auth', 'role:staff,technician'])->prefix('staff')->name('staff.')->group(function () {

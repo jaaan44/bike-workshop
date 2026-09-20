@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\BookingStatus;
+use App\Notifications\BookingStatusUpdated;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -105,7 +106,13 @@ class Booking extends Model
     }
 
     /**
-     * Update the status and record who changed it, atomically.
+     * Update the status and record who changed it, atomically. This is the
+     * single funnel every controller action uses to change a booking's
+     * status, which makes it the one reliable place to notify the customer
+     * of lifecycle events that matter to them (see
+     * BookingStatus::customerNotificationMessage()) — the notification is
+     * queued to fire only after the transaction actually commits, so a
+     * failed/rolled-back transition never leaves a stray notification behind.
      */
     public function transitionTo(BookingStatus $status): void
     {
@@ -121,6 +128,12 @@ class Booking extends Model
             // directly here rather than through update().
             $this->status = $status;
             $this->save();
+
+            if ($message = $status->customerNotificationMessage()) {
+                DB::afterCommit(fn () => $this->user->notify(
+                    new BookingStatusUpdated($this->id, $this->reference_number, $status, $message)
+                ));
+            }
         });
     }
 

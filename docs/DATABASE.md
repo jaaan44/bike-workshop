@@ -1,6 +1,6 @@
 # Database — Bicycle Workshop Management App
 
-Derived directly from the 15 migration files in `database/migrations/` (3 Laravel framework migrations + 12 application migrations) and confirmed by running `php artisan migrate:fresh` end-to-end against a disposable SQLite database during this audit — all 15 ran cleanly, no conflicts, no obsolete/duplicated migrations found.
+Derived directly from the 16 migration files in `database/migrations/` (3 Laravel framework migrations + 13 application migrations, the latter including Phase 8's `notifications` table) and confirmed by running `php artisan migrate:fresh` end-to-end against a disposable SQLite database during this audit — all 16 ran cleanly, no conflicts, no obsolete/duplicated migrations found.
 
 All tables use MySQL (via the project's Docker Compose setup — see `docs/PROJECT_STATUS.md` §3) via Laravel's default `bigint unsigned auto_increment` primary key (`$table->id()`) and `timestamps()` (`created_at`/`updated_at`) unless noted otherwise.
 
@@ -8,7 +8,7 @@ All tables use MySQL (via the project's Docker Compose setup — see `docs/PROJE
 
 ## Entity-Relationship Diagram
 
-Only tables that actually exist are shown. Framework infrastructure tables (`cache`, `cache_locks`, `jobs`, `job_batches`, `failed_jobs`, `sessions`, `password_reset_tokens`) are omitted for clarity — they exist (standard Laravel) but carry no application logic.
+Only tables that actually exist are shown. Framework infrastructure tables (`cache`, `cache_locks`, `jobs`, `job_batches`, `failed_jobs`, `sessions`, `password_reset_tokens`) are omitted for clarity — they exist (standard Laravel) but carry no application logic. `notifications` (Phase 8) *is* shown below, since — although it's also a standard Laravel table — it now carries real application data (customer lifecycle alerts).
 
 ```mermaid
 erDiagram
@@ -19,6 +19,7 @@ erDiagram
     USERS ||--o{ REPAIR_INSPECTIONS : "inspected_by (nullable)"
     USERS ||--o{ REPAIR_ITEMS : "added_by (nullable)"
     USERS ||--o{ TECHNICIAN_NOTES : writes
+    USERS ||--o{ NOTIFICATIONS : "notifiable (polymorphic)"
 
     BICYCLE_TYPES ||--o{ BICYCLES : categorizes
     BICYCLES ||--o{ BOOKINGS : "is subject of"
@@ -115,6 +116,14 @@ erDiagram
         text note
         timestamp created_at "no updated_at"
     }
+    NOTIFICATIONS {
+        uuid id PK
+        string type "App\Notifications\BookingStatusUpdated"
+        string notifiable_type "App\Models\User"
+        bigint notifiable_id FK
+        text data "JSON: booking_id, booking_reference_number, status, message"
+        timestamp read_at "nullable, null = unread"
+    }
 ```
 
 ---
@@ -187,6 +196,15 @@ erDiagram
 - **No `updated_at`** — `const UPDATED_AT = null`, `created_at` via `useCurrent()`. Append-only, same pattern as `booking_status_histories`.
 - Index on `booking_id`.
 
+### `notifications` (Phase 8)
+**Purpose:** in-app, database-backed alerts for the booking owner when their repair reaches a customer-meaningful lifecycle stage (accepted, bike received, awaiting approval, repair started/completed, ready for pickup/delivery, completed). Laravel's own standard notifications table — no project-specific columns were added.
+- `id`: UUID primary key (not the usual `bigint` — this is Laravel's framework convention for this table, unchanged).
+- `type`: fully-qualified notification class name; always `App\Notifications\BookingStatusUpdated` in this app (the only notification class that exists).
+- `notifiable_type` / `notifiable_id`: polymorphic pair identifying the recipient; always `App\Models\User` / a customer's `users.id` in this app (only customers are notified — see `docs/ARCHITECTURE.md` §11 and `docs/PROJECT_STATUS.md` §22).
+- `data`: JSON-encoded payload — `booking_id`, `booking_reference_number`, `status` (the `BookingStatus` enum value the booking transitioned to), and `message` (the pre-rendered customer-facing text). Deliberately **not** a snapshot of the booking/inspection/repair-item records — just identifiers plus the message needed to render the notification and link back to `customer.repairs.show`.
+- `read_at`: nullable timestamp; `null` means unread. Set via Laravel's built-in `markAsRead()`, called by `NotificationController::read()`/`readAll()`.
+- No foreign key constraint on `notifiable_id` (Laravel's standard notifications table doesn't declare one, since `notifiable_type` can point at any model) — deleting a `User` would leave orphaned notification rows rather than cascading, same tradeoff the framework ships with everywhere else it's used. Not a concern in this app today (there is no user-delete feature anywhere).
+
 ---
 
 ## Migrations Review
@@ -205,13 +223,16 @@ All 12 application migrations (chronologically):
 10. `2026_08_19_004038_create_repair_inspections_table`
 11. `2026_08_19_004039_create_repair_items_table`
 12. `2026_08_19_004040_create_technician_notes_table`
+13. `2026_09_20_000001_create_notifications_table` (Phase 8)
 
-**No obsolete, duplicated, or conflicting migrations were found.** The sequence is linear and each migration does exactly one thing (create one table, or in one case add two columns to an existing table). Every migration has a working, symmetrical `down()` method. This audit did not modify any migration.
+**No obsolete, duplicated, or conflicting migrations were found.** The sequence is linear and each migration does exactly one thing (create one table, or in one case add two columns to an existing table). Every migration has a working, symmetrical `down()` method. This audit did not modify any pre-existing migration.
 
 **Phase 7 note:** Customer Repair Tracking + Staff Dashboard Fix required **no schema changes**. The customer repair timeline reads directly from the existing `booking_status_histories` table via `Booking::statusHistories()` (already a working relationship, previously rendered only on the staff side); the staff dashboard fix only changed what `Staff\DashboardController` read from the existing `bookings.status` column, via a query that was already running. No new table, no new column, no new index was needed for either deliverable.
+
+**Phase 8 note:** In-App Notifications required exactly **one new table** (`notifications`, Laravel's standard schema — see the table detail above) and no other schema changes. `bookings`/`booking_status_histories` were deliberately left untouched — notification dispatch reads the target status passed into `Booking::transitionTo()` and needs no new column on `bookings` to do so.
 
 ---
 
 ## PLANNED / FUTURE — does not exist yet
 
-Nothing in the current schema anticipates future tables (no empty/placeholder migrations, no unused columns beyond the one dead enum value noted in `PROJECT_STATUS.md`). Anything not listed above (e.g. a dedicated "appointment slots" table, a "notifications" table, file/photo attachments for inspections or repair items, an "admin" concept) is **not implemented** and would require new migrations from scratch.
+Nothing in the current schema anticipates future tables beyond what's listed above (no empty/placeholder migrations, no unused columns beyond the one dead enum value noted in `PROJECT_STATUS.md`). A dedicated "appointment slots" table, file/photo attachments for inspections or repair items, and an "admin" concept are all **not implemented** and would require new migrations from scratch. The `notifications` table (previously listed here as planned) was added in Phase 8 — see above; it is no longer planned/future, it exists.
