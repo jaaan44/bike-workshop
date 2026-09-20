@@ -208,6 +208,8 @@ All 12 application migrations (chronologically):
 
 **No obsolete, duplicated, or conflicting migrations were found.** The sequence is linear and each migration does exactly one thing (create one table, or in one case add two columns to an existing table). Every migration has a working, symmetrical `down()` method. This audit did not modify any migration.
 
+**Phase 7 note:** Customer Repair Tracking + Staff Dashboard Fix required **no schema changes**. The customer repair timeline reads directly from the existing `booking_status_histories` table via `Booking::statusHistories()` (already a working relationship, previously rendered only on the staff side); the staff dashboard fix only changed what `Staff\DashboardController` read from the existing `bookings.status` column, via a query that was already running. No new table, no new column, no new index was needed for either deliverable.
+
 ---
 
 ## PLANNED / FUTURE — does not exist yet

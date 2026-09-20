@@ -2,43 +2,43 @@
 
 Concise by design. For depth, see `PROJECT_STATUS.md` (full audit), `ARCHITECTURE.md` (diagrams, request flow, workflow state machine), `DATABASE.md` (schema + ER diagram). This file is written to be handed directly to another AI session or developer with zero prior context.
 
-**Audit date:** 2026-09-14. **Branch:** `claude/bicycle-workshop-app-6mp087`. **Commit:** `6bfc49e`.
+**Audit date:** 2026-09-14 (original); **updated 2026-09-20 for Phase 7**. **Branch:** `claude/phase-7-customer-tracking-dashboard-xgv1hy` (Phase 7); prior work on `claude/bicycle-workshop-app-6mp087`, commit `6bfc49e`.
 
 ---
 
 ## Where are we now?
 
-A mobile-first Laravel + Blade + Tailwind + Alpine.js bicycle repair shop app. Six build phases are complete: Foundation/Auth, Bicycle Management, Repair Booking, Workshop Booking Management, Repair Job (inspection/items/technician/notes), Repair Workflow (the full status pipeline from inspection through completion). All work is committed and pushed to the branch above; working tree is clean.
+A mobile-first Laravel + Blade + Tailwind + Alpine.js bicycle repair shop app. Seven build phases are complete: Foundation/Auth, Bicycle Management, Repair Booking, Workshop Booking Management, Repair Job (inspection/items/technician/notes), Repair Workflow (the full status pipeline from inspection through completion), and Phase 7 (Customer Repair Tracking + Staff Dashboard Fix). All work is committed and pushed to the branch above; working tree is clean.
 
 ## What works?
 
 Everything end-to-end from customer registration through a bicycle being marked completed and handed back:
 
-- Customer: register, add/edit bicycles, book a repair (5-step wizard: bike → parts → remarks → date → review), view booking status, approve/decline proposed repairs.
-- Staff/technician: review and accept/cancel bookings, receive the bike, record inspection findings, assign a technician, add/complete repair items, add internal notes, send for customer approval, mark repairs complete, run a quality check (pass → pickup/delivery, or fail → rework loop), mark fulfilled.
-- Full status audit trail on every transition (`booking_status_histories`), auto-generated human-readable reference numbers (`BR-2026-00001`), role-based access control (customer vs. staff/technician), ownership-based authorization on the customer side (can't see another customer's bicycle/booking).
-- 82 automated tests, all passing. `npm run build` succeeds cleanly.
+- Customer: register, add/edit bicycles, book a repair (5-step wizard: bike → parts → remarks → date → review), **view a full repair-tracking page for each booking** (status, bicycle, submitted/appointment dates, inspection findings + recommended work once shared, itemized proposed repairs with approval state, contextual quality-check/pickup/delivery/completion messaging, and a chronological repair timeline built from the existing status-history audit trail), approve/decline proposed repairs.
+- Staff/technician: review and accept/cancel bookings, receive the bike, record inspection findings, assign a technician, add/complete repair items, add internal notes, send for customer approval, mark repairs complete, run a quality check (pass → pickup/delivery, or fail → rework loop), mark fulfilled. **Dashboard stat tiles are now all real, accurate counts** (previously four of them were hardcoded to `0`).
+- Full status audit trail on every transition (`booking_status_histories`), auto-generated human-readable reference numbers (`BR-2026-00001`), role-based access control (customer vs. staff/technician), ownership-based authorization on the customer side (can't see another customer's bicycle/booking) — this same `BookingPolicy::view` check now also gates the customer tracking page.
+- 98 automated tests, all passing (82 pre-Phase-7 + 16 new: `tests/Feature/CustomerRepairTrackingTest.php`, `tests/Feature/StaffDashboardTest.php`). `npm run build` succeeds cleanly.
 
 ## What does not work / doesn't exist?
 
 - **No bicycle delete** — only add/edit/view.
-- **No customer-facing status-history timeline** — customers see the current status badge and (once shared) a one-time proposed-repairs snapshot, but not the full chronological history staff can see.
-- **No notifications** (email/SMS/push) on any status change.
-- **Staff dashboard has hardcoded `0` tiles** for "Awaiting Approval", "Quality Check", "In Repair", "Ready" — real data exists for these now (Phases 5–6 added the statuses) but `Staff\DashboardController` was never updated to query them. This is the most visible bug in the app today.
+- **No notifications** (email/SMS/push) on any status change — explicitly out of scope for Phase 7, still not implemented.
 - **No per-technician authorization** — any staff or technician can act on any booking, not just their own assigned ones.
 - **No admin role.**
-- **`scheduled` status is defined but never used** by any code path.
+- **`scheduled` status is defined but never used** by any code path — Phase 7 did not touch this; it remains a known, harmless piece of dead code per its own explicit instructions.
 - Appointment booking is a plain date picker — no time slots or capacity.
+- No per-bicycle repair-history view (the customer repairs list is still all bookings, not filtered per bicycle).
 
 ## What was most recently implemented?
 
-Phase 6 — the full repair workflow from `inspection` through `completed`, including a quality-check pass/fail rework loop and the customer approve/decline step. See `git log --oneline -3` for the exact commits.
+**Phase 7 — Customer Repair Tracking + Staff Dashboard Fix.** See `docs/PROJECT_STATUS.md` §14/§17.1/§20 and `docs/ARCHITECTURE.md` §10 for full detail. In short:
+- `customer/repairs/show.blade.php` gained a chronological repair timeline (built from `Booking::statusHistories()`, no new table), inspection/proposed-repair detail, and contextual status messaging.
+- `Staff\DashboardController`/`staff/dashboard.blade.php` — the four previously-hardcoded `0` tiles now show real, efficiently-queried counts.
+- No schema changes, no new routes, no new policies — both deliverables reused existing relationships/authorization. See `git log --oneline -3` for the exact commit(s).
 
 ## What should be implemented next?
 
-**Recommended: Phase 7, Customer Tracking.** Render `Booking::statusHistories` (already a working relationship, already used on the staff side) on `customer/repairs/show.blade.php` so customers get a real timeline instead of just a status badge. This is the natural next step and was explicitly deferred through Phases 5–6 for exactly this reason.
-
-Quick win alongside or before that: fix the hardcoded dashboard tiles (`resources/views/staff/dashboard.blade.php` + `Staff\DashboardController::index()`) — five minutes of work, currently actively misleading.
+See `docs/PROJECT_STATUS.md` §21 for the current recommended-next-phase list (notifications on key status transitions is the top candidate, followed by per-technician authorization and bicycle delete). Nothing has been started on any of these yet.
 
 ## How do I start the project?
 
@@ -67,11 +67,11 @@ If MySQL isn't ready the instant the app container starts, the entrypoint polls 
 docker compose exec app php artisan test
 docker compose exec app ./vendor/bin/pint --dirty
 ```
-Expected: 82 tests, 0 failures, Pint clean. Without Docker (native PHP/Composer/Node on the host, no MySQL reachable), temporarily point `.env` at SQLite to run tests — back up `.env` first, restore it after; don't leave it on SQLite, the real runtime is always MySQL.
+Expected: 98 tests, 0 failures, Pint clean. Without Docker (native PHP/Composer/Node on the host, no MySQL reachable), temporarily point `.env` at SQLite to run tests — back up `.env` first, restore it after; don't leave it on SQLite, the real runtime is always MySQL. `npm run build` (or `npm ci && npm run build` if `node_modules` isn't present) must be run at least once before `php artisan test`, since some feature tests render full pages through `@vite(...)` and fail with `ViteManifestNotFoundException` if `public/build/manifest.json` doesn't exist yet.
 
 ## Are there known bugs?
 
-One real one: the staff dashboard's four stat tiles are literally hardcoded to `0` for `awaiting_customer_approval`, `quality_check`, `repair_in_progress`, and the ready-for-pickup/delivery states (see above). Everything else audited works as designed — no data-loss bugs, no broken migrations, no failing tests.
+None outstanding as of Phase 7. The staff dashboard's stat tiles (previously hardcoded to `0` for `awaiting_customer_approval`, `quality_check`, `repair_in_progress`, and the ready-for-pickup/delivery states) were fixed in Phase 7 — see `docs/PROJECT_STATUS.md` §17.1. Everything audited works as designed — no data-loss bugs, no broken migrations, no failing tests.
 
 ## Architectural decisions the next developer must preserve
 

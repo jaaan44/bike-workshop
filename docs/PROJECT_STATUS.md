@@ -1,18 +1,18 @@
 # Project Status — Bicycle Workshop Management App
 
-**Audit date:** 2026-09-14
-**Branch audited:** `claude/bicycle-workshop-app-6mp087`
+**Audit date:** 2026-09-14 (original audit below); **updated 2026-09-20** for Phase 7 — Customer Tracking + Staff Dashboard Fix.
+**Branch audited:** `claude/bicycle-workshop-app-6mp087` (original); Phase 7 developed on `claude/phase-7-customer-tracking-dashboard-xgv1hy`
 **Commit audited:** `6bfc49e` ("Add Phase 6: repair workflow (inspection through completion)")
 
-This document is a factual snapshot of what exists in the repository as of the commit above. It was produced by reading the actual code (models, controllers, migrations, routes, views, tests), not by inferring from commit messages or specs. Anything marked **PLANNED / FUTURE** does not exist yet — it is called out explicitly so it is never confused with working functionality.
+This document is a factual snapshot of what exists in the repository as of the commit above, plus Phase 7 updates layered on top (marked **"(Phase 7)"** where they change a Phase-6-era finding). It was produced by reading the actual code (models, controllers, migrations, routes, views, tests), not by inferring from commit messages or specs. Anything marked **PLANNED / FUTURE** does not exist yet — it is called out explicitly so it is never confused with working functionality.
 
 ---
 
 ## 1. Project Overview
 
-A mobile-first web app for a bicycle repair shop. Customers register, add their bicycles, and book repairs by selecting which parts/areas need attention. Workshop staff and technicians review bookings, receive the bike, inspect it, get customer approval on proposed repairs, do the work, run a quality check, and hand the bike back. Every status change is recorded for audit purposes.
+A mobile-first web app for a bicycle repair shop. Customers register, add their bicycles, and book repairs by selecting which parts/areas need attention. Workshop staff and technicians review bookings, receive the bike, inspect it, get customer approval on proposed repairs, do the work, run a quality check, and hand the bike back. Every status change is recorded for audit purposes, and (as of Phase 7) customers can see that full audit trail as a chronological repair timeline on their own booking's detail page.
 
-The application has been built incrementally in six phases (see commit history), each phase adding one vertical slice of functionality with tests and a manual verification pass. All six phases are complete and merged into this branch.
+The application has been built incrementally in seven phases (see commit history), each phase adding one vertical slice of functionality with tests and a manual verification pass. Phase 7 (Customer Repair Tracking + Staff Dashboard Fix) is complete and merged into this branch.
 
 ---
 
@@ -205,8 +205,8 @@ There is no separate "Technician" route group — technicians use the same `/sta
 | Edit Bike | `customer.bikes.edit` | customer | Same form as create, pre-filled | ✅ |
 | Repair List | `customer.repairs.index` | customer | List of the customer's bookings with status badges | ✅ |
 | Book a Repair | `customer.repairs.create` | customer | 5-step Alpine wizard (bike → parts → remarks → date → review) | ✅ |
-| Repair/Booking Detail | `customer.repairs.show` | customer | Status, reported issues/remarks, proposed-repairs + approve/decline once shared | ✅ (no full history timeline — see §14) |
-| Staff Dashboard | `staff.dashboard` | staff/technician | Stat tiles + active-jobs list | 🟡 partially wired (see Known Issues — some tiles are hardcoded `0`) |
+| Repair/Booking Detail | `customer.repairs.show` | customer | Status, submitted/appointment dates, reported issues/remarks, inspection findings + recommended work once shared, proposed-repairs + approve/decline once shared, contextual quality-check/pickup/delivery/completion messaging, full chronological repair timeline | ✅ (Phase 7 — see §14) |
+| Staff Dashboard | `staff.dashboard` | staff/technician | Stat tiles (all seven now real counts) + active-jobs list | ✅ (Phase 7 — see §17.1) |
 | Bookings List | `staff.bookings.index` | staff/technician | All bookings, priority-sorted | ✅ |
 | Booking Detail | `staff.bookings.show` | staff/technician | Full booking management surface — the single largest view in the app: accept/receive/cancel, technician assignment, inspection form, repair items, technician notes, and every workflow-transition action | ✅ |
 | Jobs List | `staff.jobs.index` | staff/technician | Bookings past acceptance (active work), technician's own assignments sorted first | ✅ |
@@ -275,7 +275,7 @@ pending | accepted → cancelled                     [cancellation, terminal]
 
 Every arrow above corresponds to an actual, tested, guarded controller action — none of this is aspirational. See `docs/ARCHITECTURE.md` for the full transition table and guard conditions.
 
-**What "customer tracking" currently amounts to:** the customer sees the current status badge everywhere their booking appears, plus — once the booking reaches `awaiting_customer_approval` or later — a read-only summary of the inspection's recommended repairs and the repair item list, with Approve/Decline buttons while in that specific state. There is **no chronological status-history timeline shown to the customer** (staff see one; customers do not) and no notifications (email/SMS/push) of any kind on status change. This was the explicitly-scoped remaining item going into the next phase at the time of this audit.
+**What "customer tracking" amounts to as of Phase 7:** the customer sees the current status badge everywhere their booking appears; on the booking detail page (`customer.repairs.show`) they additionally see the bicycle, submitted date, appointment date, a "last update" relative timestamp, and — once the booking reaches a "shareable" status (`awaiting_customer_approval` or later, same gate as before) — the inspection's findings and recommended repairs, the itemized repair-item list with each item's completed/pending state, Approve/Decline while awaiting approval (or "You approved these repairs on {date}" afterward), contextual messaging for quality-check/ready-for-pickup/ready-for-delivery/completed, and a full **chronological repair timeline** built directly from `Booking::statusHistories()` (the same relationship/audit trail staff already used — no new table, no duplicated data). The timeline's first entry ("Booking Submitted") is synthesized from `booking->created_at` because booking creation itself doesn't write a status-history row (see `Booking::booted()`); every later entry is a real `booking_status_histories` row rendered with its existing `BookingStatus::label()`, so a quality-check rework loop (`quality_check → repair_in_progress → repair_completed → quality_check`) shows every real pass through those stages rather than a deduplicated/linear view. There is still **no notification (email/SMS/push) of any kind on status change** — that remains out of scope and unimplemented.
 
 ---
 
@@ -293,11 +293,11 @@ Transitions are not validated against a formal state-transition table/graph — 
 
 ## 16. Tests
 
-Full results from this audit (run via `php artisan test` against a temporary SQLite database, since no MySQL server is reachable in this sandboxed audit environment):
+Full results as of Phase 7 (run via `php artisan test` against a temporary SQLite database, since no MySQL server is reachable in this sandboxed environment — see `docs/HANDOFF.md` for the native-SQLite test procedure):
 
 ```
-Tests: 82, Passed: 82, Failed: 0, Assertions: 192
-Duration: ~2.3–2.9s
+Tests: 98, Passed: 98, Failed: 0, Assertions: 234
+Duration: ~2.5–2.7s
 ```
 
 Breakdown by file:
@@ -306,8 +306,10 @@ Breakdown by file:
 |---|---|
 | `tests/Feature/StaffBookingManagementTest.php` | 28 |
 | `tests/Feature/BookingTest.php` | 14 |
+| `tests/Feature/StaffDashboardTest.php` | 7 (Phase 7) |
 | `tests/Feature/BicycleTest.php` | 7 |
 | `tests/Feature/RoleAccessTest.php` | 7 |
+| `tests/Feature/CustomerRepairTrackingTest.php` | 9 (Phase 7) |
 | `tests/Feature/ProfileTest.php` | 5 |
 | `tests/Feature/Auth/AuthenticationTest.php` | 4 |
 | `tests/Feature/Auth/PasswordResetTest.php` | 4 |
@@ -317,23 +319,22 @@ Breakdown by file:
 | `tests/Feature/Auth/PasswordUpdateTest.php` | 2 |
 | `tests/Feature/ExampleTest.php` | 1 |
 | `tests/Unit/ExampleTest.php` | 1 |
-| **Total** | **82** |
+| **Total** | **98** |
 
-**Coverage is strong** on: role-based route access, the full repair-booking wizard (including cross-customer authorization), every staff booking-management transition and its guard conditions (including the two mass-assignment traps that were specifically regression-tested), customer approve/decline + cross-customer authorization, and standard Breeze auth flows.
+**Coverage is strong** on: role-based route access, the full repair-booking wizard (including cross-customer authorization), every staff booking-management transition and its guard conditions (including the two mass-assignment traps that were specifically regression-tested), customer approve/decline + cross-customer authorization, standard Breeze auth flows, and — as of Phase 7 — the customer repair-tracking page (timeline ordering, minimal-history bookings, the quality-check rework loop rendering every real pass through the loop, inspection/repair-item rendering when present and when absent, ready-for-pickup/delivery and completed states) and the staff dashboard's seven stat-tile counts (each status bucket, including that "Ready" correctly sums both `ready_for_pickup` and `ready_for_delivery`, and that unrelated statuses like `cancelled`/`completed` never get counted into any tile).
 
 **Areas without test coverage:**
-- No test asserts anything about the `staff.dashboard` view's stat tiles (which is how the hardcoded-zero issue below went unnoticed — see §17).
-- No Dusk/browser-level test exists in the repo today (a one-off Playwright script was used during development to verify a specific bug fix, then removed — it is not part of the committed test suite).
+- No Dusk/browser-level test exists in the repo today (a one-off Playwright script was used during development to verify a specific bug fix, then removed — it is not part of the committed test suite). Phase 7's manual verification (§ below) included a full HTTP walkthrough instead, covering the same ground a browser test would.
 - No test covers the `bicycle_types`/`bicycle_part_categories` seeders directly (they are exercised indirectly via feature tests that depend on seeded/factory data).
-- `npm run build` was run manually for this audit (succeeds, ~2.7s) — there is no automated frontend test or CI step that runs it.
+- `npm run build` was run manually for Phase 7 (succeeds, ~0.8–0.9s) — there is no automated frontend test or CI step that runs it.
 
-`./vendor/bin/pint --dirty` / a full `pint` pass reports no style violations on the current tree (the project has been kept Pint-clean throughout development).
+`./vendor/bin/pint --dirty` / a full `pint` pass reports no style violations on the current tree (the project has been kept Pint-clean throughout development, including Phase 7's changes).
 
 ---
 
 ## 17. Known Issues
 
-1. **Staff dashboard stat tiles are partially hardcoded.** `resources/views/staff/dashboard.blade.php` has four stat tiles — "Awaiting Approval", "Quality Check", "In Repair", "Ready" — that are hardcoded to the literal string `0` in the Blade template rather than being passed from `Staff\DashboardController::index()`. That controller only computes counts for `Pending`, `Accepted`, and `BikeReceived`. This means the dashboard has not been updated since Phase 4 despite Phases 5 and 6 adding five more statuses to the workflow — it currently under-reports the real state of the shop's work whenever any booking is in `awaiting_customer_approval`, `repair_in_progress`, `quality_check`, `ready_for_pickup`, or `ready_for_delivery`.
+1. ~~**Staff dashboard stat tiles are partially hardcoded.**~~ — **resolved in Phase 7.** `Staff\DashboardController::index()` now computes all seven tile counts (`newBookingsCount`, `acceptedCount`, `bikeReceivedCount`, `awaitingApprovalCount`, `inRepairCount`, `qualityCheckCount`, `readyCount`) from one grouped `count(*) ... GROUP BY status` query (no N+1, no loading bookings into PHP just to count them) and `resources/views/staff/dashboard.blade.php` renders all of them instead of the four literal `0`s. `readyCount` sums both `ready_for_pickup` and `ready_for_delivery` since the UI's "Ready" tile always meant both fulfillment methods together. See `tests/Feature/StaffDashboardTest.php` for regression coverage.
 2. **`scheduled` status is dead code** — defined, styled, never set (§15).
 3. **README's "Project status" section is stale.** It currently states "Bicycle registration, booking, and the repair workflow are not yet built," which was true when it was written (end of Phase 1) but has been false since Phase 2. This audit's documentation (and the README update made alongside it) corrects this.
 4. ~~Root-level `compose.yaml` (Sail) is unused dead configuration~~ — **resolved**: `compose.yaml` is now the project's single canonical Docker Compose setup (see updated §3); the stale Sail version it used to contain is gone.
@@ -348,7 +349,7 @@ No data-loss, broken-migration, or failing-test issues were found.
 
 Light review only — not a full security audit. No high-severity issues found.
 
-- **Ownership checks are consistently applied** where they matter: `BicyclePolicy`/`BookingPolicy` gate customer access to their own bicycles/bookings (`$this->authorize(...)` calls present on every customer controller action that takes a route-bound model), and this is positively tested (`test_customer_cannot_view_another_customers_booking`, `test_customer_cannot_book_a_repair_for_another_customers_bicycle`, `test_customer_cannot_approve_another_customers_booking`, etc.).
+- **Ownership checks are consistently applied** where they matter: `BicyclePolicy`/`BookingPolicy` gate customer access to their own bicycles/bookings (`$this->authorize(...)` calls present on every customer controller action that takes a route-bound model), and this is positively tested (`test_customer_cannot_view_another_customers_booking`, `test_customer_cannot_book_a_repair_for_another_customers_bicycle`, `test_customer_cannot_approve_another_customers_booking`, etc.). The Phase 7 repair-tracking page reuses this same `BookingPolicy::view` check (`RepairController::show()` already called `$this->authorize('view', $booking)` before Phase 7; that call was not changed) — confirmed with a live HTTP walkthrough (log in as one customer, request another customer's booking URL directly) returning 403, matching the existing `test_customer_cannot_view_another_customers_booking` coverage.
 - **Mass-assignment protection is deliberately used as a security boundary**, not just a convenience: `status`, `assigned_technician_id`, and `completed_at` are excluded from their models' `#[Fillable]` lists specifically so a crafted request body can't set them directly through `update()`/`create()`. Every write path for these fields was checked and uses direct property assignment instead.
 - **Technician assignment is validated server-side** against the `technician` role (`Rule::exists('users', 'id')->where('role', UserRole::Technician->value)`), not just filtered in the UI — confirmed by a passing test that a non-technician user ID is rejected.
 - **CSRF**: standard Laravel CSRF middleware applies to all state-changing routes; every form in every Blade view checked includes `@csrf`.
@@ -363,10 +364,10 @@ Light review only — not a full security audit. No high-severity issues found.
 ## 19. Technical Debt
 
 **High Priority**
-- Staff dashboard stat tiles hardcoded to `0` for half the workflow (§17.1) — actively misleading to whoever uses that screen daily.
+- ~~Staff dashboard stat tiles hardcoded to `0` for half the workflow~~ — resolved in Phase 7 (§17.1).
 
 **Medium Priority**
-- No customer-facing status-history timeline (full chronological view is staff-only right now) — flagged as the natural next phase.
+- ~~No customer-facing status-history timeline~~ — resolved in Phase 7 (§14): `customer.repairs.show` now renders a full chronological timeline from `Booking::statusHistories()`.
 - No per-technician authorization boundary — anyone in the workshop role can touch any booking.
 - `Booking` model relationships plus five new controller action methods have made `Staff\BookingController` the largest controller in the app (17 public actions). Still readable and each action is small/single-purpose, but it's a candidate for splitting (e.g. a separate controller for the quality-check sub-flow) if the workflow grows further.
 - Status-transition guards are duplicated `if ($booking->status !== X)` checks scattered across two controllers rather than a single declarative transition table — works correctly today (every transition is tested) but makes it easy to introduce an inconsistency if a new transition is added without checking every existing guard.
@@ -401,19 +402,23 @@ No TODO/FIXME/XXX comments exist anywhere in the codebase (`grep` returned zero 
 | Technician assignment | ✅ | Server-side role validation |
 | Repair items | ✅ | Add + independent completion tracking |
 | Technician notes | ✅ | Append-only, timestamped, attributed |
-| Repair status history | ✅ | Full audit trail (`booking_status_histories`) — staff-visible only |
+| Repair status history | ✅ | Full audit trail (`booking_status_histories`) — visible to both staff and, as of Phase 7, the owning customer |
 | Repair completion | ✅ | Guarded on all repair items being done |
 | Quality check | ✅ | Pass (pickup/delivery choice) or fail (rework loop) |
 | Ready for pickup | ✅ | Pickup and delivery both supported |
-| Customer tracking | 🟡 | Status badge + one-time proposed-repairs snapshot only; no full timeline, no notifications |
+| Customer tracking | ✅ | Phase 7: status badge, submitted/appointment/last-update info, inspection findings + recommended work, itemized proposed repairs with approval state, contextual QC/pickup/delivery/completion messaging, and a full chronological timeline built from `booking_status_histories`. No notifications (still out of scope). |
+| Staff dashboard accuracy | ✅ | Phase 7: all seven stat tiles are real, efficiently-queried counts (§17.1) |
 | Repair history | 🟡 | Existing bookings list only; no per-bicycle history view |
 
 ---
 
 ## 21. Recommended Next Development Phase
 
-Based on this audit, the single most logical next phase is **Customer Tracking** (the phase explicitly deferred throughout Phases 5–6): give the customer a real, chronological view of their booking's status history (mirroring the staff-only timeline that already exists on `staff/bookings/show.blade.php`), on the existing `customer.repairs.show` screen. This is a natural, self-contained extension of code that already exists (`Booking::statusHistories()` is already a working relationship; it's simply never loaded/rendered on the customer side) and directly closes the biggest gap identified in this audit (§14, §20) without requiring new tables or new workflow logic.
+Phase 7 (Customer Tracking + Staff Dashboard Fix) closed the two gaps this document previously flagged as the natural next steps. Based on the current state of the app, reasonable candidates for a Phase 8 (not implemented, not started — listed here only as a recommendation per this document's own convention) are, roughly in priority order:
 
-A secondary candidate, if notifications are wanted before a deeper tracking UI: wiring up Laravel notifications (mail, since `MAIL_MAILER=log` is already configured for local dev) to fire on key status transitions the customer cares about — booking accepted, awaiting your approval, ready for pickup/delivery.
+1. **Notifications** — wire up Laravel notifications (mail, since `MAIL_MAILER=log` is already configured for local dev) to fire on key status transitions the customer cares about (booking accepted, awaiting your approval, ready for pickup/delivery). Phase 7 deliberately did not implement this (explicitly out of scope for that phase).
+2. **Per-technician authorization boundary** — restrict a technician to acting only on bookings assigned to them, rather than any staff/technician being able to touch any booking (§6, §19).
+3. **Bicycle delete** and a **per-bicycle repair history view** (§11, §20) — both small, self-contained gaps.
+4. Splitting `Staff\BookingController` (still the largest controller in the app) if the workflow grows further, and/or formalizing the scattered status-transition guards into a single declarative table (§19) — cleanup, not user-facing.
 
-This recommendation is **not implemented** as part of this audit, per the task's explicit scope (documentation only).
+This recommendation is **not implemented** — Phase 8 has not been started.

@@ -1,5 +1,6 @@
 @php
     $partsByCategory = $booking->bicycleParts->groupBy(fn ($part) => $part->bicyclePartCategory->name);
+
     $shareableStatuses = [
         \App\Enums\BookingStatus::AwaitingCustomerApproval,
         \App\Enums\BookingStatus::RepairInProgress,
@@ -9,6 +10,29 @@
         \App\Enums\BookingStatus::ReadyForDelivery,
         \App\Enums\BookingStatus::Completed,
     ];
+    $isShareable = in_array($booking->status, $shareableStatuses, true);
+
+    $history = $booking->statusHistories->sortBy('id')->values();
+
+    // The timeline's first entry is synthetic: a booking is created directly
+    // with status=pending (see Booking::booted()), so no status-history row
+    // exists for the very first stage. Every later entry comes straight from
+    // booking_status_histories, the app's one authoritative audit trail.
+    $timeline = collect([
+        (object) ['label' => 'Booking Submitted', 'timestamp' => $booking->created_at],
+    ])->concat($history->map(fn ($entry) => (object) [
+        'label' => $entry->new_status->label(),
+        'timestamp' => $entry->created_at,
+    ]));
+    $currentIndex = $timeline->count() - 1;
+
+    $approvalEntry = $history->last(fn ($entry) => $entry->old_status === \App\Enums\BookingStatus::AwaitingCustomerApproval
+        && $entry->new_status === \App\Enums\BookingStatus::RepairInProgress);
+    $repairCompletedEntry = $history->last(fn ($entry) => $entry->new_status === \App\Enums\BookingStatus::RepairCompleted);
+    $fulfillmentEntry = $history->last(fn ($entry) => in_array($entry->new_status, [\App\Enums\BookingStatus::ReadyForPickup, \App\Enums\BookingStatus::ReadyForDelivery], true));
+    $completedEntry = $history->last(fn ($entry) => $entry->new_status === \App\Enums\BookingStatus::Completed);
+
+    $latestUpdate = optional($history->last())->created_at ?? $booking->created_at;
 @endphp
 
 <x-app-layout>
@@ -34,13 +58,19 @@
         <div class="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{{ session('error') }}</div>
     @endif
 
+    <!-- Summary -->
     <div class="bg-white rounded-xl border border-gray-200 p-4 mb-4">
         <div class="flex items-start justify-between gap-2 mb-3">
             <div>
                 <p class="font-semibold text-gray-900">{{ $booking->bicycle->nickname }}</p>
-                <p class="text-sm text-gray-500">Appointment: {{ $booking->appointment_date->format('l, M j, Y') }}</p>
+                <p class="text-sm text-gray-500">{{ $booking->bicycle->bicycleType->name }}</p>
             </div>
             <x-status-badge :status="$booking->status" />
+        </div>
+        <div class="text-sm text-gray-700 space-y-0.5">
+            <p><span class="text-gray-500">Submitted:</span> {{ $booking->created_at->format('M j, Y') }}</p>
+            <p><span class="text-gray-500">Appointment:</span> {{ $booking->appointment_date->format('l, M j, Y') }}</p>
+            <p class="text-gray-500">Last update: {{ $latestUpdate->diffForHumans() }}</p>
         </div>
     </div>
 
@@ -69,21 +99,40 @@
         </div>
     @endif
 
-    @if (in_array($booking->status, $shareableStatuses, true) && ($booking->inspection || $booking->repairItems->isNotEmpty()))
-        <div class="bg-white rounded-xl border border-gray-200 p-4" x-data="">
+    @if ($isShareable && $booking->inspection && ($booking->inspection->findings || $booking->inspection->recommended_repairs))
+        <div class="bg-white rounded-xl border border-gray-200 p-4 mb-4">
+            <p class="text-xs font-semibold text-gray-500 uppercase mb-2">Inspection</p>
+
+            @if ($booking->inspection->findings)
+                <p class="text-xs font-medium text-gray-500 mb-1">Findings</p>
+                <p class="text-sm text-gray-900 whitespace-pre-line mb-3">{{ $booking->inspection->findings }}</p>
+            @endif
+
+            @if ($booking->inspection->recommended_repairs)
+                <p class="text-xs font-medium text-gray-500 mb-1">Recommended Work</p>
+                <p class="text-sm text-gray-900 whitespace-pre-line">{{ $booking->inspection->recommended_repairs }}</p>
+            @endif
+        </div>
+    @endif
+
+    @if ($isShareable && $booking->repairItems->isNotEmpty())
+        <div class="bg-white rounded-xl border border-gray-200 p-4 mb-4" x-data="">
             <p class="text-xs font-semibold text-gray-500 uppercase mb-2">Proposed Repairs</p>
 
-            @if ($booking->inspection?->recommended_repairs)
-                <p class="text-sm text-gray-900 whitespace-pre-line mb-3">{{ $booking->inspection->recommended_repairs }}</p>
-            @endif
-
-            @if ($booking->repairItems->isNotEmpty())
-                <ul class="space-y-1 mb-3">
-                    @foreach ($booking->repairItems as $item)
-                        <li class="text-sm text-gray-700">&bull; {{ $item->description }}</li>
-                    @endforeach
-                </ul>
-            @endif
+            <ul class="space-y-1 mb-3">
+                @foreach ($booking->repairItems as $item)
+                    <li class="text-sm text-gray-700 flex items-center gap-2">
+                        @if ($item->isCompleted())
+                            <span class="text-green-600" aria-hidden="true">&check;</span>
+                            <span class="text-gray-400 line-through">{{ $item->description }}</span>
+                            <span class="sr-only">(done)</span>
+                        @else
+                            <span aria-hidden="true">&bull;</span>
+                            <span>{{ $item->description }}</span>
+                        @endif
+                    </li>
+                @endforeach
+            </ul>
 
             @if ($booking->status === \App\Enums\BookingStatus::AwaitingCustomerApproval)
                 <div class="grid grid-cols-2 gap-2 mt-3">
@@ -114,7 +163,66 @@
                         </div>
                     </form>
                 </x-modal>
+            @elseif ($approvalEntry)
+                <p class="text-xs text-gray-500 pt-2 border-t border-gray-100">
+                    You approved these repairs on {{ $approvalEntry->created_at->format('M j, Y g:ia') }}.
+                </p>
             @endif
         </div>
     @endif
+
+    @if ($booking->status === \App\Enums\BookingStatus::QualityCheck)
+        <div class="mb-4 rounded-lg bg-purple-50 border border-purple-200 px-4 py-3 text-sm text-purple-700">
+            Your repair is complete and is now going through a final quality check.
+        </div>
+    @elseif (in_array($booking->status, [\App\Enums\BookingStatus::ReadyForPickup, \App\Enums\BookingStatus::ReadyForDelivery], true))
+        <div class="mb-4 rounded-lg bg-teal-50 border border-teal-200 px-4 py-3 text-sm text-teal-700">
+            @if ($booking->status === \App\Enums\BookingStatus::ReadyForPickup)
+                Your bicycle has passed quality check and is ready for pickup at the workshop.
+            @else
+                Your bicycle has passed quality check and is ready to be delivered to you.
+            @endif
+        </div>
+    @elseif ($booking->status === \App\Enums\BookingStatus::Completed)
+        <div class="mb-4 rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700">
+            This repair is complete
+            @if ($fulfillmentEntry)
+                &mdash; {{ $fulfillmentEntry->new_status === \App\Enums\BookingStatus::ReadyForPickup ? 'picked up' : 'delivered' }}
+            @endif
+            @if ($completedEntry)
+                on {{ $completedEntry->created_at->format('M j, Y') }}
+            @endif
+            . Thanks for choosing us!
+        </div>
+    @elseif ($repairCompletedEntry && $booking->status === \App\Enums\BookingStatus::RepairCompleted)
+        <div class="mb-4 rounded-lg bg-purple-50 border border-purple-200 px-4 py-3 text-sm text-purple-700">
+            Repair work is finished and about to go through quality check.
+        </div>
+    @endif
+
+    <!-- Repair Timeline -->
+    <div class="bg-white rounded-xl border border-gray-200 p-4">
+        <p class="text-xs font-semibold text-gray-500 uppercase mb-3">Repair Timeline</p>
+        <ol class="space-y-4">
+            @foreach ($timeline as $index => $entry)
+                @php $isCurrent = $index === $currentIndex; @endphp
+                <li class="relative pl-6">
+                    @if (! $loop->last)
+                        <span class="absolute left-[5px] top-4 bottom-[-1rem] w-px bg-gray-200" aria-hidden="true"></span>
+                    @endif
+                    <span
+                        class="absolute left-0 top-1 h-2.5 w-2.5 rounded-full {{ $isCurrent ? 'bg-indigo-600 ring-4 ring-indigo-100' : 'bg-green-500' }}"
+                        aria-hidden="true"
+                    ></span>
+                    <p class="text-sm {{ $isCurrent ? 'font-semibold text-gray-900' : 'font-medium text-gray-700' }}">
+                        {{ $entry->label }}
+                        @if ($isCurrent)
+                            <span class="ml-1 text-xs font-medium text-indigo-600">(Current)</span>
+                        @endif
+                    </p>
+                    <p class="text-xs text-gray-400">{{ $entry->timestamp->format('M j, Y g:ia') }}</p>
+                </li>
+            @endforeach
+        </ol>
+    </div>
 </x-app-layout>

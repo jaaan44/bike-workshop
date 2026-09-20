@@ -10,11 +10,11 @@
                 <p class="text-xs text-gray-500 mt-1">New Bookings</p>
             </a>
             <div class="bg-white rounded-xl border border-gray-200 p-4 text-center">
-                <p class="text-2xl font-bold text-gray-900">0</p>
+                <p class="text-2xl font-bold text-gray-900">{{ $awaitingApprovalCount }}</p>
                 <p class="text-xs text-gray-500 mt-1">Awaiting Approval</p>
             </div>
             <div class="bg-white rounded-xl border border-gray-200 p-4 text-center">
-                <p class="text-2xl font-bold text-gray-900">0</p>
+                <p class="text-2xl font-bold text-gray-900">{{ $qualityCheckCount }}</p>
                 <p class="text-xs text-gray-500 mt-1">Quality Check</p>
             </div>
         </div>
@@ -32,11 +32,11 @@
                 <p class="text-[11px] text-gray-500 mt-1">Received</p>
             </div>
             <div class="bg-white rounded-xl border border-gray-200 p-3 text-center">
-                <p class="text-lg font-bold text-gray-900">0</p>
+                <p class="text-lg font-bold text-gray-900">{{ $inRepairCount }}</p>
                 <p class="text-[11px] text-gray-500 mt-1">In Repair</p>
             </div>
             <div class="bg-white rounded-xl border border-gray-200 p-3 text-center">
-                <p class="text-lg font-bold text-gray-900">0</p>
+                <p class="text-lg font-bold text-gray-900">{{ $readyCount }}</p>
                 <p class="text-[11px] text-gray-500 mt-1">Ready</p>
             </div>
         </div>

@@ -47,7 +47,9 @@ class RepairController extends Controller
         $this->authorize('view', $booking);
 
         return view('customer.repairs.show', [
-            'booking' => $booking->load(['bicycle', 'bicycleParts.bicyclePartCategory', 'inspection', 'repairItems']),
+            'booking' => $booking->load([
+                'bicycle.bicycleType', 'bicycleParts.bicyclePartCategory', 'inspection', 'repairItems', 'statusHistories',
+            ]),
         ]);
     }
 
