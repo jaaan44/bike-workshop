@@ -1,10 +1,10 @@
 # Project Status — Bicycle Workshop Management App
 
-**Audit date:** 2026-09-14 (original audit below); **updated 2026-09-20** for Phase 7 — Customer Tracking + Staff Dashboard Fix.
-**Branch audited:** `claude/bicycle-workshop-app-6mp087` (original); Phase 7 developed on `claude/phase-7-customer-tracking-dashboard-xgv1hy`
+**Audit date:** 2026-09-14 (original audit below); updated 2026-09-20 for Phase 7 — Customer Tracking + Staff Dashboard Fix; **updated 2026-09-20** for Phase 8 — In-App Notifications.
+**Branch audited:** `claude/bicycle-workshop-app-6mp087` (original); Phase 7 developed on `claude/phase-7-customer-tracking-dashboard-xgv1hy`; Phase 8 developed on `claude/phase-8-in-app-notifications-y2zjme`
 **Commit audited:** `6bfc49e` ("Add Phase 6: repair workflow (inspection through completion)")
 
-This document is a factual snapshot of what exists in the repository as of the commit above, plus Phase 7 updates layered on top (marked **"(Phase 7)"** where they change a Phase-6-era finding). It was produced by reading the actual code (models, controllers, migrations, routes, views, tests), not by inferring from commit messages or specs. Anything marked **PLANNED / FUTURE** does not exist yet — it is called out explicitly so it is never confused with working functionality.
+This document is a factual snapshot of what exists in the repository as of the commit above, plus Phase 7 and Phase 8 updates layered on top (marked **"(Phase 7)"** / **"(Phase 8)"** where they change an earlier finding). It was produced by reading the actual code (models, controllers, migrations, routes, views, tests), not by inferring from commit messages or specs. Anything marked **PLANNED / FUTURE** does not exist yet — it is called out explicitly so it is never confused with working functionality.
 
 ---
 
@@ -275,7 +275,9 @@ pending | accepted → cancelled                     [cancellation, terminal]
 
 Every arrow above corresponds to an actual, tested, guarded controller action — none of this is aspirational. See `docs/ARCHITECTURE.md` for the full transition table and guard conditions.
 
-**What "customer tracking" amounts to as of Phase 7:** the customer sees the current status badge everywhere their booking appears; on the booking detail page (`customer.repairs.show`) they additionally see the bicycle, submitted date, appointment date, a "last update" relative timestamp, and — once the booking reaches a "shareable" status (`awaiting_customer_approval` or later, same gate as before) — the inspection's findings and recommended repairs, the itemized repair-item list with each item's completed/pending state, Approve/Decline while awaiting approval (or "You approved these repairs on {date}" afterward), contextual messaging for quality-check/ready-for-pickup/ready-for-delivery/completed, and a full **chronological repair timeline** built directly from `Booking::statusHistories()` (the same relationship/audit trail staff already used — no new table, no duplicated data). The timeline's first entry ("Booking Submitted") is synthesized from `booking->created_at` because booking creation itself doesn't write a status-history row (see `Booking::booted()`); every later entry is a real `booking_status_histories` row rendered with its existing `BookingStatus::label()`, so a quality-check rework loop (`quality_check → repair_in_progress → repair_completed → quality_check`) shows every real pass through those stages rather than a deduplicated/linear view. There is still **no notification (email/SMS/push) of any kind on status change** — that remains out of scope and unimplemented.
+**What "customer tracking" amounts to as of Phase 7:** the customer sees the current status badge everywhere their booking appears; on the booking detail page (`customer.repairs.show`) they additionally see the bicycle, submitted date, appointment date, a "last update" relative timestamp, and — once the booking reaches a "shareable" status (`awaiting_customer_approval` or later, same gate as before) — the inspection's findings and recommended repairs, the itemized repair-item list with each item's completed/pending state, Approve/Decline while awaiting approval (or "You approved these repairs on {date}" afterward), contextual messaging for quality-check/ready-for-pickup/ready-for-delivery/completed, and a full **chronological repair timeline** built directly from `Booking::statusHistories()` (the same relationship/audit trail staff already used — no new table, no duplicated data). The timeline's first entry ("Booking Submitted") is synthesized from `booking->created_at` because booking creation itself doesn't write a status-history row (see `Booking::booted()`); every later entry is a real `booking_status_histories` row rendered with its existing `BookingStatus::label()`, so a quality-check rework loop (`quality_check → repair_in_progress → repair_completed → quality_check`) shows every real pass through those stages rather than a deduplicated/linear view.
+
+**As of Phase 8**, the timeline/tracking page above is complemented — not replaced — by in-app **notifications**: a database-backed alert fires automatically whenever a booking transitions to one of eight customer-meaningful statuses (see §22 below for the full list and architecture). The repair timeline remains the authoritative, complete history; notifications are alerts the customer can read/dismiss and are not a substitute for it. Email/SMS/push notifications remain out of scope and unimplemented — only in-app/database notifications exist.
 
 ---
 
@@ -293,11 +295,11 @@ Transitions are not validated against a formal state-transition table/graph — 
 
 ## 16. Tests
 
-Full results as of Phase 7 (run via `php artisan test` against a temporary SQLite database, since no MySQL server is reachable in this sandboxed environment — see `docs/HANDOFF.md` for the native-SQLite test procedure):
+Full results as of Phase 8 (run via `php artisan test` against a temporary SQLite database, since no MySQL server is reachable in this sandboxed environment — see `docs/HANDOFF.md` for the native-SQLite test procedure):
 
 ```
-Tests: 98, Passed: 98, Failed: 0, Assertions: 234
-Duration: ~2.5–2.7s
+Tests: 121, Passed: 121, Failed: 0, Assertions: 309
+Duration: ~3.0–3.3s
 ```
 
 Breakdown by file:
@@ -305,6 +307,7 @@ Breakdown by file:
 | File | Tests |
 |---|---|
 | `tests/Feature/StaffBookingManagementTest.php` | 28 |
+| `tests/Feature/CustomerNotificationTest.php` | 23 (Phase 8) |
 | `tests/Feature/BookingTest.php` | 14 |
 | `tests/Feature/StaffDashboardTest.php` | 7 (Phase 7) |
 | `tests/Feature/BicycleTest.php` | 7 |
@@ -319,16 +322,16 @@ Breakdown by file:
 | `tests/Feature/Auth/PasswordUpdateTest.php` | 2 |
 | `tests/Feature/ExampleTest.php` | 1 |
 | `tests/Unit/ExampleTest.php` | 1 |
-| **Total** | **98** |
+| **Total** | **121** |
 
-**Coverage is strong** on: role-based route access, the full repair-booking wizard (including cross-customer authorization), every staff booking-management transition and its guard conditions (including the two mass-assignment traps that were specifically regression-tested), customer approve/decline + cross-customer authorization, standard Breeze auth flows, and — as of Phase 7 — the customer repair-tracking page (timeline ordering, minimal-history bookings, the quality-check rework loop rendering every real pass through the loop, inspection/repair-item rendering when present and when absent, ready-for-pickup/delivery and completed states) and the staff dashboard's seven stat-tile counts (each status bucket, including that "Ready" correctly sums both `ready_for_pickup` and `ready_for_delivery`, and that unrelated statuses like `cancelled`/`completed` never get counted into any tile).
+**Coverage is strong** on: role-based route access, the full repair-booking wizard (including cross-customer authorization), every staff booking-management transition and its guard conditions (including the two mass-assignment traps that were specifically regression-tested), customer approve/decline + cross-customer authorization, standard Breeze auth flows, the customer repair-tracking page (timeline ordering, minimal-history bookings, the quality-check rework loop rendering every real pass through the loop, inspection/repair-item rendering when present and when absent, ready-for-pickup/delivery and completed states), the staff dashboard's seven stat-tile counts, and — as of Phase 8 — **notifications**: generation on all eight notifiable transitions (data-provider-driven, one case per status), non-generation on internal-only transitions (`inspection`, `quality_check`, `cancelled`, `scheduled`), no notification from booking creation itself, the QC-rework loop producing a second `repair_in_progress`/`repair_completed` notification pair rather than being deduplicated, that a guarded/rejected transition (the controller never reaching `transitionTo()`) leaves no stray notification, newest-first ordering on the notifications index, unread vs. read rendering, cross-customer notification access being rejected (both reading another customer's notification in one's own list and attempting to mark it read), that a notification's redirect still can't bypass `BookingPolicy::view` even if the stored `booking_id` pointed at a booking the notifiable customer doesn't own, mark-as-read-and-redirect behavior, mark-all-as-read scoped to only the authenticated customer, and the nav unread-count badge reflecting only the authenticated customer's own count.
 
 **Areas without test coverage:**
-- No Dusk/browser-level test exists in the repo today (a one-off Playwright script was used during development to verify a specific bug fix, then removed — it is not part of the committed test suite). Phase 7's manual verification (§ below) included a full HTTP walkthrough instead, covering the same ground a browser test would.
+- No Dusk/browser-level test exists in the repo today (a one-off Playwright script was used during development to verify a specific bug fix, then removed — it is not part of the committed test suite). Phase 7 and Phase 8's manual verification (see each phase's HTTP walkthrough) covered the same ground a browser test would; Phase 8's walkthrough (booking → accept → notification → read → redirect → inspection → approval-required notification → approve → repair → QC rework loop → ready-for-pickup → badge count → mark-all-as-read → cross-customer rejection) was run as a temporary, non-committed feature test exercising the real HTTP kernel end-to-end, then discarded.
 - No test covers the `bicycle_types`/`bicycle_part_categories` seeders directly (they are exercised indirectly via feature tests that depend on seeded/factory data).
-- `npm run build` was run manually for Phase 7 (succeeds, ~0.8–0.9s) — there is no automated frontend test or CI step that runs it.
+- `npm run build` was run manually for Phase 7 and Phase 8 (succeeds, <1s) — there is no automated frontend test or CI step that runs it. Phase 8 added no new frontend assets/JS — the nav badge and notifications page are plain Blade/Tailwind, same as the rest of the app.
 
-`./vendor/bin/pint --dirty` / a full `pint` pass reports no style violations on the current tree (the project has been kept Pint-clean throughout development, including Phase 7's changes).
+`./vendor/bin/pint --dirty` / a full `pint` pass reports no style violations on the current tree (the project has been kept Pint-clean throughout development, including Phase 7 and Phase 8's changes).
 
 ---
 
@@ -406,19 +409,79 @@ No TODO/FIXME/XXX comments exist anywhere in the codebase (`grep` returned zero 
 | Repair completion | ✅ | Guarded on all repair items being done |
 | Quality check | ✅ | Pass (pickup/delivery choice) or fail (rework loop) |
 | Ready for pickup | ✅ | Pickup and delivery both supported |
-| Customer tracking | ✅ | Phase 7: status badge, submitted/appointment/last-update info, inspection findings + recommended work, itemized proposed repairs with approval state, contextual QC/pickup/delivery/completion messaging, and a full chronological timeline built from `booking_status_histories`. No notifications (still out of scope). |
+| Customer tracking | ✅ | Phase 7: status badge, submitted/appointment/last-update info, inspection findings + recommended work, itemized proposed repairs with approval state, contextual QC/pickup/delivery/completion messaging, and a full chronological timeline built from `booking_status_histories`. |
 | Staff dashboard accuracy | ✅ | Phase 7: all seven stat tiles are real, efficiently-queried counts (§17.1) |
 | Repair history | 🟡 | Existing bookings list only; no per-bicycle history view |
+| In-app notifications | ✅ | Phase 8: database-backed customer notifications on 8 lifecycle transitions, notifications index page, unread-count nav badge, mark-as-read/mark-all-as-read, cross-customer authorization enforced. Email/SMS/push remain out of scope — see §22. |
 
 ---
 
 ## 21. Recommended Next Development Phase
 
-Phase 7 (Customer Tracking + Staff Dashboard Fix) closed the two gaps this document previously flagged as the natural next steps. Based on the current state of the app, reasonable candidates for a Phase 8 (not implemented, not started — listed here only as a recommendation per this document's own convention) are, roughly in priority order:
+Phase 7 (Customer Tracking + Staff Dashboard Fix) and Phase 8 (In-App Notifications) closed the gaps this document previously flagged as the natural next steps. Based on the current state of the app, reasonable candidates for a Phase 9 (not implemented, not started — listed here only as a recommendation per this document's own convention) are, roughly in priority order:
 
-1. **Notifications** — wire up Laravel notifications (mail, since `MAIL_MAILER=log` is already configured for local dev) to fire on key status transitions the customer cares about (booking accepted, awaiting your approval, ready for pickup/delivery). Phase 7 deliberately did not implement this (explicitly out of scope for that phase).
-2. **Per-technician authorization boundary** — restrict a technician to acting only on bookings assigned to them, rather than any staff/technician being able to touch any booking (§6, §19).
-3. **Bicycle delete** and a **per-bicycle repair history view** (§11, §20) — both small, self-contained gaps.
+1. **Per-technician authorization boundary** — restrict a technician to acting only on bookings assigned to them, rather than any staff/technician being able to touch any booking (§6, §19).
+2. **Bicycle delete** and a **per-bicycle repair history view** (§11, §20) — both small, self-contained gaps.
+3. **Delivery channels beyond in-app** — email (or SMS) delivery for the same notification events, now that the database-notification plumbing and the one centralized trigger point (`Booking::transitionTo()`) already exist; would mean adding a `mail` (or other) channel to `via()` in `App\Notifications\BookingStatusUpdated` and, per Phase 8's own explicit scope boundary, introducing queue infrastructure first so mail sending doesn't block the request. Deliberately not started in Phase 8.
 4. Splitting `Staff\BookingController` (still the largest controller in the app) if the workflow grows further, and/or formalizing the scattered status-transition guards into a single declarative table (§19) — cleanup, not user-facing.
 
-This recommendation is **not implemented** — Phase 8 has not been started.
+This recommendation is **not implemented** — Phase 9 has not been started.
+
+---
+
+## 22. Phase 8 — In-App Notifications
+
+Phase 8 adds database-backed, in-app-only customer notifications on top of the existing repair workflow. No email/SMS/push/WebSocket/queue infrastructure was introduced — per the phase's own scope, delivery is synchronous and confined to Laravel's standard `database` notification channel.
+
+### 22.1 Architecture
+
+**Migration:** one new table, `notifications` — Laravel's own standard schema (the same columns `php artisan make:notifications-table` generates, matching `Illuminate\Notifications\DatabaseNotification`'s expectations: UUID primary key, `type`, polymorphic `notifiable_type`/`notifiable_id`, `data`, `read_at`). No project-specific notification table was introduced; `App\Models\User` already `use`d the `Notifiable` trait (present since the initial Breeze scaffold, previously only wired for Breeze's own email-verification notification) so no model change was needed on that side.
+
+**Trigger point:** `Booking::transitionTo()` (`app/Models/Booking.php`) — the same single funnel every controller action already used to change a booking's status. After writing the `booking_status_histories` row and saving the new status (inside the existing `DB::transaction()`), it checks `BookingStatus::customerNotificationMessage()` for the target status; if it returns a message, a `DB::afterCommit()` callback is registered to send `App\Notifications\BookingStatusUpdated` to `$this->user` (the booking's owner). Using `DB::afterCommit()` rather than sending the notification directly means a rolled-back transition (an exception thrown mid-transaction) never leaves a stray notification behind — the callback simply never runs. No controller was touched to add this; every existing call site (`Staff\BookingController`, `Customer\RepairController`) automatically gained notification dispatch for free, which is exactly the "one reliable place" the phase's brief asked for instead of scattering `notify()` calls across controllers.
+
+**Which statuses notify:** `BookingStatus::customerNotificationMessage()` (`app/Enums/BookingStatus.php`) is the single source of truth — a `match` expression returning a customer-facing message string for 8 of the enum's 13 cases, and `null` for the rest:
+
+| Status | Notifies? | Message |
+|---|---|---|
+| `accepted` | ✅ | "Your repair booking has been accepted." |
+| `bike_received` | ✅ | "We've received your bicycle." |
+| `awaiting_customer_approval` | ✅ | "Your bicycle inspection is complete. Please review and approve the proposed repair work." |
+| `repair_in_progress` | ✅ | "Repair work on your bicycle has started." |
+| `repair_completed` | ✅ | "Repair work on your bicycle has been completed and is awaiting quality inspection." |
+| `ready_for_pickup` | ✅ | "Your bicycle is ready for pickup." |
+| `ready_for_delivery` | ✅ | "Your bicycle is ready for delivery." |
+| `completed` | ✅ | "Your bicycle repair has been completed." |
+| `pending`, `scheduled`, `inspection`, `quality_check`, `cancelled` | ❌ | n/a — purely internal/administrative stages, or (for `pending`) never reached via `transitionTo()` at all (see below) |
+
+`pending` is set directly in `Booking::booted()` at creation time, not via `transitionTo()`, so it was never a candidate — this also means **no notification fires merely because a booking was created**, consistent with the phase's "avoid noisy notifications" requirement. `inspection` and `quality_check` are intermediate/internal stages the customer doesn't need an alert for (the *next* stage after each — `awaiting_customer_approval` and `ready_for_pickup`/`ready_for_delivery`/back to `repair_in_progress` — is what's actually notified). `cancelled` and `scheduled` (the latter already dead code, see §15/§17) were deliberately left out of the 8-status spec and are not notified.
+
+**QC rework loop:** the enum method is keyed purely on the *target status of this transition*, not "has this booking ever reached this status before" — so `quality_check → repair_in_progress` (rework) fires the same `repair_in_progress` notification a second time, and the following `repair_completed` fires again too. Nothing in the implementation deduplicates by status value; `tests/Feature/CustomerNotificationTest.php::test_quality_check_rework_loop_produces_a_second_repair_in_progress_notification` asserts exactly 2 notifications of each kind after two full passes through the loop.
+
+**Notification payload** (`App\Notifications\BookingStatusUpdated::toArray()`, `app/Notifications/BookingStatusUpdated.php`): `booking_id`, `booking_reference_number`, `status` (the enum's string value), and `message` — identifiers plus the pre-rendered customer-facing message, not a snapshot of the booking, inspection, or repair items. The notifications index view reads `booking_id` to build the "open" link and `booking_reference_number`/`message`/`created_at` to render the list; nothing else in the booking is duplicated into the notification.
+
+### 22.2 Customer UI
+
+- **Notifications index** (`customer.notifications.index` → `GET /customer/notifications`, `App\Http\Controllers\Customer\NotificationController::index`, view `resources/views/customer/notifications/index.blade.php`): the authenticated customer's own notifications (`$request->user()->notifications()`, Laravel's own `Notifiable::notifications()` relation — ordered newest-first by default), paginated 20 per page. Each row shows the message, a relative timestamp (`created_at->diffForHumans()`), the booking reference number, and unread state. Unread items are distinguished by **both** a background tint (`bg-indigo-50`) **and** a small solid dot plus bold text plus a screen-reader-only "(unread)" label — not color alone, per the phase's accessibility requirement. Each row is itself a `POST` form (consistent with every other state-changing action in this app's UI, e.g. approve/decline) that marks the notification read and redirects to its booking. Empty state reuses the existing `<x-empty-state>` component.
+- **Mark all as read**: a button in the page header, shown only when at least one notification is unread, `POST`s to `customer.notifications.read-all`.
+- **Unread-count nav badge** (`resources/views/components/bottom-nav.blade.php`): the customer bottom-nav gained a fifth item ("Alerts", 🔔), and the grid changed from a fixed 4-column to a conditional 4/5-column layout (`grid-cols-4` for staff/technician, unchanged; `grid-cols-5` for customers) rather than displacing an existing item. The badge count comes from `auth()->user()->unreadNotifications()->count()` (again, Laravel's own `Notifiable` relation, scoped to the authenticated user only — never another customer's), rendered as a small red circle over the bell icon (capped display at "9+"), plus a screen-reader-only "(N unread)" suffix on the label text so the count isn't conveyed by color/position alone.
+
+### 22.3 Authorization
+
+No new policy class was added; ownership is enforced by **query scoping** rather than a post-hoc ability check, mirroring the existing pattern where customer-side controllers already scope by relationship (e.g. `$request->user()->bookings()`):
+- `NotificationController::index()` reads through `$request->user()->notifications()` — structurally impossible to return another customer's rows.
+- `NotificationController::read()` takes the notification's id as a plain route *value* (not a route-model-bound `DatabaseNotification`, which would resolve globally by primary key with no ownership check) and resolves it via `$request->user()->notifications()->findOrFail($notification)`. A notification id belonging to a different customer 404s (`ModelNotFoundException`) rather than ever being loaded, so there's no window where an unauthorized notification is fetched and then rejected — it's simply never found for the wrong user.
+- `NotificationController::readAll()` operates on `$request->user()->unreadNotifications` — same scoping.
+- **Redirect can't bypass booking authorization:** after marking a notification read, the controller redirects to `route('customer.repairs.show', $notification->data['booking_id'])`, which is unconditionally guarded by the existing `$this->authorize('view', $booking)` call in `Customer\RepairController::show()` (`BookingPolicy::view`, unchanged by Phase 8). Even in the contrived case of a notification whose stored `booking_id` pointed at a booking its notifiable user doesn't actually own, the destination route still 403s — verified directly by `test_notification_redirect_cannot_bypass_booking_authorization`, which manually constructs such a notification and confirms the follow-through redirect is forbidden.
+- All three actions are covered by cross-customer tests in `tests/Feature/CustomerNotificationTest.php` (view, mark-as-read, mark-all-as-read).
+
+### 22.4 Transaction safety
+
+Handled entirely by `DB::afterCommit()` inside `Booking::transitionTo()`'s existing `DB::transaction()` closure (see §22.1) — no queue was introduced for this (Phase 8 explicitly keeps notification creation synchronous, consistent with the rest of the app, which has no queue worker in active use). `test_failed_transition_does_not_leave_a_stray_notification` covers the case where a controller-level guard rejects a transition before `transitionTo()` is ever called (the overwhelmingly common "failure" case in this codebase, since every transition is guarded by an explicit status check before the call) — no notification exists in that case, because the code path that would create one never runs.
+
+### 22.5 Database
+
+One migration: `database/migrations/2026_09_20_000001_create_notifications_table.php` — Laravel's standard `notifications` table (`id` UUID primary key, `type`, polymorphic `notifiable_type`/`notifiable_id`, `data` JSON/text, `read_at` nullable, timestamps). No other schema changes — `bookings` and `booking_status_histories` are untouched, per the phase's explicit instruction not to add lifecycle columns to `bookings` for this.
+
+### 22.6 Deferred / explicitly out of scope
+
+Per the phase's own brief, none of the following exist and were not started: email, SMS, WhatsApp, push notifications (Firebase/APNs), WebSockets/Laravel Echo/Pusher, per-notification delivery preferences, scheduled/reminder jobs, queue infrastructure, staff/technician notification inbox or task system, chat, repair photos, GPS tracking, or marketing/promotional notifications. §21 above records "delivery channels beyond in-app" as a possible future phase, not something Phase 8 attempted.

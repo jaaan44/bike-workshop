@@ -1,6 +1,6 @@
 # Architecture — Bicycle Workshop Management App
 
-This document describes the actual, current architecture of the application as implemented on branch `claude/bicycle-workshop-app-6mp087` (commit `6bfc49e`), **updated for Phase 7** (Customer Repair Tracking + Staff Dashboard Fix). All diagrams reflect real code — models, relationships, and controller actions that exist and are exercised by the test suite — not a target design. Phase 7 added no new tables, models, routes, or architectural layers; it is purely additive within the existing MVC structure — see §10 below for what changed.
+This document describes the actual, current architecture of the application as implemented on branch `claude/bicycle-workshop-app-6mp087` (commit `6bfc49e`), updated for Phase 7 (Customer Repair Tracking + Staff Dashboard Fix) and **updated for Phase 8** (In-App Notifications). All diagrams reflect real code — models, relationships, and controller actions that exist and are exercised by the test suite — not a target design. Phase 7 added no new tables, models, routes, or architectural layers; it is purely additive within the existing MVC structure — see §10 below for what changed. Phase 8 added one table (`notifications`, Laravel's standard schema), one model-adjacent notification class, one controller, and three routes — see §11 below.
 
 ---
 
@@ -51,7 +51,7 @@ app/
     AppLayout.php, GuestLayout.php   Breeze default layout components
 ```
 
-**What does not exist:** no `app/Services/`, no `app/Repositories/`, no `app/Traits/`, no `app/Jobs/` (beyond the framework's own queue tables, unused), no `app/Events/`/`app/Listeners/` beyond Breeze's built-in `Registered` event usage, no `app/Notifications/`, no API controllers, no Gates defined in `AppServiceProvider` (authorization is 100% middleware + the two policies above).
+**What does not exist:** no `app/Services/`, no `app/Repositories/`, no `app/Traits/`, no `app/Jobs/` (beyond the framework's own queue tables, unused), no `app/Events/`/`app/Listeners/` beyond Breeze's built-in `Registered` event usage, no API controllers, no Gates defined in `AppServiceProvider` (authorization is 100% middleware + the two policies above). **As of Phase 8**, `app/Notifications/` exists with one class, `BookingStatusUpdated` (database-channel only) — see §11.
 
 ---
 
@@ -59,7 +59,7 @@ app/
 
 | Model | Table | Key relationships |
 |---|---|---|
-| `User` | `users` | `hasMany` Bicycle, `hasMany` Booking |
+| `User` | `users` | `hasMany` Bicycle, `hasMany` Booking, `morphMany` `Illuminate\Notifications\DatabaseNotification` (via the `Notifiable` trait — `notifications()`/`unreadNotifications()`, Phase 8) |
 | `Bicycle` | `bicycles` | `belongsTo` User, `belongsTo` BicycleType |
 | `BicycleType` | `bicycle_types` | `hasMany` Bicycle |
 | `BicyclePartCategory` | `bicycle_part_categories` | `hasMany` BicyclePart |
@@ -170,6 +170,17 @@ public function transitionTo(BookingStatus $status): void
         ]);
         $this->status = $status;   // direct assignment — status is not mass-assignable
         $this->save();
+
+        // Phase 8: the same funnel every transition already goes through is
+        // also the one reliable place to notify the customer. Deferred to
+        // DB::afterCommit() so a rolled-back transition never leaves a
+        // stray notification behind. See BookingStatus::customerNotificationMessage()
+        // for which statuses actually notify (most don't).
+        if ($message = $status->customerNotificationMessage()) {
+            DB::afterCommit(fn () => $this->user->notify(
+                new BookingStatusUpdated($this->id, $this->reference_number, $status, $message)
+            ));
+        }
     });
 }
 ```
@@ -264,3 +275,69 @@ The rest of the page's new sections (inspection findings/recommended work, itemi
 ### 10.2 Staff dashboard fix (`staff.dashboard`)
 
 `Staff\DashboardController::index()` already ran one grouped query (`Booking::query()->selectRaw('status, count(*) as count')->groupBy('status')->pluck('count', 'status')`) and a `$countFor(BookingStatus $status)` closure over it, but only used that closure for three of the ten non-terminal statuses (`Pending`, `Accepted`, `BikeReceived`) — the view hardcoded the other four tiles to `0`. Phase 7 extends the same closure to the remaining tiles (`awaitingApprovalCount`, `inRepairCount`, `qualityCheckCount`, and `readyCount` — the last summing `ReadyForPickup` + `ReadyForDelivery`, since the UI has always had one combined "Ready" tile for both fulfillment methods) and passes them to the view, which now renders them instead of literal `0`s. No new query was added — the existing single grouped query already had every status's count available; it just wasn't being read.
+
+---
+
+## 11. Phase 8 — In-App Notifications
+
+Phase 8 adds one table, one notification class, one controller, and three routes — the smallest architectural footprint of any phase so far, deliberately, per the phase's "keep it simple" brief. See `docs/PROJECT_STATUS.md` §22 for the full write-up (which statuses notify and why, payload contents, manual verification); this section covers structure/placement only.
+
+### 11.1 New pieces
+
+```
+app/
+  Enums/
+    BookingStatus.php          + customerNotificationMessage(): ?string
+  Models/
+    Booking.php                transitionTo() now dispatches a notification after commit
+  Notifications/                 NEW directory
+    BookingStatusUpdated.php   database-channel notification (booking_id, reference number, status, message)
+  Http/Controllers/Customer/
+    NotificationController.php NEW — index/read/readAll
+database/migrations/
+  2026_09_20_000001_create_notifications_table.php   Laravel's standard notifications table
+resources/views/customer/notifications/
+  index.blade.php              NEW
+resources/views/components/
+  bottom-nav.blade.php         customer nav gained a 5th item ("Alerts") with an unread-count badge
+```
+
+No new model was added — `App\Models\User` already had `use Notifiable` (from the Breeze scaffold, previously exercised only by email verification) and needed no change to gain `notifications()`/`unreadNotifications()`/`notify()`. No new policy was added; ownership is enforced by query-scoping through the authenticated user rather than a `NotificationPolicy` ability check (see PROJECT_STATUS.md §22.3 for why that's sufficient here).
+
+### 11.2 Routes
+
+Three new routes, inside the existing `auth`/`role:customer` group (`routes/web.php`):
+
+| Method | URL | Name | Controller@action |
+|---|---|---|---|
+| GET | `/customer/notifications` | `customer.notifications.index` | `NotificationController@index` |
+| POST | `/customer/notifications/read-all` | `customer.notifications.read-all` | `NotificationController@readAll` |
+| POST | `/customer/notifications/{notification}/read` | `customer.notifications.read` | `NotificationController@read` |
+
+`{notification}` is a plain route parameter (the notification's UUID string), not an Eloquent route-model binding — `read()` resolves it via `$request->user()->notifications()->findOrFail($notification)` instead, which is what makes cross-customer access 404 rather than requiring a separate authorization check (see PROJECT_STATUS.md §22.3).
+
+### 11.3 Request flow (example: staff accepts a booking, customer gets notified)
+
+```mermaid
+sequenceDiagram
+    participant Staff as Staff browser
+    participant Ctrl as Staff\BookingController
+    participant Booking as Booking model
+    participant DB as MySQL
+    participant Notif as BookingStatusUpdated
+
+    Staff->>Ctrl: POST /staff/bookings/{booking}/accept
+    Ctrl->>Booking: $booking->transitionTo(BookingStatus::Accepted)
+    Booking->>DB: BEGIN TRANSACTION
+    Booking->>DB: INSERT booking_status_histories
+    Booking->>DB: UPDATE bookings SET status = 'accepted'
+    Booking->>Booking: BookingStatus::Accepted->customerNotificationMessage() -> string
+    Booking->>DB: DB::afterCommit(...) registered
+    Booking->>DB: COMMIT
+    DB-->>Booking: afterCommit callback fires
+    Booking->>Notif: $booking->user->notify(new BookingStatusUpdated(...))
+    Notif->>DB: INSERT notifications (type, notifiable, data, read_at=null)
+    Ctrl-->>Staff: redirect back with session flash status
+```
+
+This is the only place in the codebase a notification is created — no controller calls `notify()` directly, which is what keeps every current and future transition-triggering action automatically notification-consistent (the failure mode the phase's brief explicitly wanted to avoid: "Controller A changes status + sends notification, Controller B changes status + forgets notification").

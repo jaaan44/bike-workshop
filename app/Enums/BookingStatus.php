@@ -36,4 +36,27 @@ enum BookingStatus: string
             self::Cancelled => 'Cancelled',
         };
     }
+
+    /**
+     * The customer-facing message to notify the booking's owner with when a
+     * transition lands on this status, or null if this status doesn't
+     * warrant a notification (purely internal/administrative stages).
+     *
+     * This is the single source of truth for which lifecycle transitions
+     * notify the customer — see Booking::transitionTo().
+     */
+    public function customerNotificationMessage(): ?string
+    {
+        return match ($this) {
+            self::Accepted => 'Your repair booking has been accepted.',
+            self::BikeReceived => "We've received your bicycle.",
+            self::AwaitingCustomerApproval => 'Your bicycle inspection is complete. Please review and approve the proposed repair work.',
+            self::RepairInProgress => 'Repair work on your bicycle has started.',
+            self::RepairCompleted => 'Repair work on your bicycle has been completed and is awaiting quality inspection.',
+            self::ReadyForPickup => 'Your bicycle is ready for pickup.',
+            self::ReadyForDelivery => 'Your bicycle is ready for delivery.',
+            self::Completed => 'Your bicycle repair has been completed.',
+            default => null,
+        };
+    }
 }
