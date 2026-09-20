@@ -1,6 +1,6 @@
 # Database — Bicycle Workshop Management App
 
-Derived directly from the 16 migration files in `database/migrations/` (3 Laravel framework migrations + 13 application migrations, the latter including Phase 8's `notifications` table) and confirmed by running `php artisan migrate:fresh` end-to-end against a disposable SQLite database during this audit — all 16 ran cleanly, no conflicts, no obsolete/duplicated migrations found.
+Derived directly from the 16 migration files in `database/migrations/` (3 Laravel framework migrations + 13 application migrations, the latter including Phase 8's `notifications` table) and confirmed by running `php artisan migrate:fresh` end-to-end against a disposable SQLite database during this audit — all 16 ran cleanly, no conflicts, no obsolete/duplicated migrations found. **Phase 9 (Bicycle Service & Repair History) added no migration** — see the note at the end of "Migrations Review" below; this schema is unchanged from the Phase 8 state.
 
 All tables use MySQL (via the project's Docker Compose setup — see `docs/PROJECT_STATUS.md` §3) via Laravel's default `bigint unsigned auto_increment` primary key (`$table->id()`) and `timestamps()` (`created_at`/`updated_at`) unless noted otherwise.
 
@@ -230,6 +230,8 @@ All 12 application migrations (chronologically):
 **Phase 7 note:** Customer Repair Tracking + Staff Dashboard Fix required **no schema changes**. The customer repair timeline reads directly from the existing `booking_status_histories` table via `Booking::statusHistories()` (already a working relationship, previously rendered only on the staff side); the staff dashboard fix only changed what `Staff\DashboardController` read from the existing `bookings.status` column, via a query that was already running. No new table, no new column, no new index was needed for either deliverable.
 
 **Phase 8 note:** In-App Notifications required exactly **one new table** (`notifications`, Laravel's standard schema — see the table detail above) and no other schema changes. `bookings`/`booking_status_histories` were deliberately left untouched — notification dispatch reads the target status passed into `Booking::transitionTo()` and needs no new column on `bookings` to do so.
+
+**Phase 9 note:** Bicycle Service & Repair History required **no schema changes at all** — no new table, no new column, no index change. A bicycle's service history is entirely derived at query time from data already in `bookings` (`status`, `updated_at`), `repair_items`, `repair_inspections`, and `booking_status_histories` — the same tables Phase 7's customer repair-tracking page already reads. In particular: no `service_histories`/`repair_histories` table was added (history is a query, not a stored record), no `completed_at` column was added to `bookings` (a completed booking's own `updated_at` is used instead, since `Completed` is a terminal status no code path transitions away from), and no cached `last_service_date`/`completed_service_count` column was added to `bicycles` (both are computed with small dedicated queries in `Customer\BikeController::show()` — see `docs/ARCHITECTURE.md` §12 and `docs/PROJECT_STATUS.md` §23.5 for why this was judged sufficient rather than a premature optimization).
 
 ---
 

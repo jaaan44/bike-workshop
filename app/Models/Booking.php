@@ -137,6 +137,25 @@ class Booking extends Model
         });
     }
 
+    /**
+     * The pickup/delivery outcome of this booking's quality check, derived
+     * from its status history — there is no dedicated column for this.
+     * Relies on statusHistories() already being eager-loaded by the caller
+     * (it is ordered newest-first, so the first match is the one that
+     * actually stuck — a booking never leaves ReadyForPickup/ReadyForDelivery
+     * except to Completed, so there's exactly one relevant entry).
+     */
+    public function fulfillmentMethod(): ?BookingStatus
+    {
+        return $this->statusHistories
+            ->first(fn (BookingStatusHistory $history) => in_array(
+                $history->new_status,
+                [BookingStatus::ReadyForPickup, BookingStatus::ReadyForDelivery],
+                true
+            ))
+            ?->new_status;
+    }
+
     protected function casts(): array
     {
         return [

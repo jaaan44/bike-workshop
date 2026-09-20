@@ -38,8 +38,19 @@ class BikeController extends Controller
     {
         $this->authorize('view', $bicycle);
 
+        $bicycle->load('bicycleType');
+
+        $completedBookings = $bicycle->completedBookings()
+            ->with(['repairItems', 'statusHistories'])
+            ->paginate(10)
+            ->withQueryString();
+
         return view('customer.bikes.show', [
-            'bicycle' => $bicycle->load('bicycleType'),
+            'bicycle' => $bicycle,
+            'activeBookings' => $bicycle->activeBookings()->get(),
+            'completedBookings' => $completedBookings,
+            'completedServiceCount' => $completedBookings->total(),
+            'lastServiceDate' => $bicycle->completedBookings()->first()?->updated_at,
         ]);
     }
 

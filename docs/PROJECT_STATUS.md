@@ -1,18 +1,18 @@
 # Project Status — Bicycle Workshop Management App
 
-**Audit date:** 2026-09-14 (original audit below); updated 2026-09-20 for Phase 7 — Customer Tracking + Staff Dashboard Fix; **updated 2026-09-20** for Phase 8 — In-App Notifications.
-**Branch audited:** `claude/bicycle-workshop-app-6mp087` (original); Phase 7 developed on `claude/phase-7-customer-tracking-dashboard-xgv1hy`; Phase 8 developed on `claude/phase-8-in-app-notifications-y2zjme`
+**Audit date:** 2026-09-14 (original audit below); updated 2026-09-20 for Phase 7 — Customer Tracking + Staff Dashboard Fix; updated 2026-09-20 for Phase 8 — In-App Notifications; **updated 2026-09-20** for Phase 9 — Bicycle Service & Repair History.
+**Branch audited:** `claude/bicycle-workshop-app-6mp087` (original); Phase 7 developed on `claude/phase-7-customer-tracking-dashboard-xgv1hy`; Phase 8 developed on `claude/phase-8-in-app-notifications-y2zjme`; Phase 9 developed on `claude/bicycle-service-repair-history-9gtkn9`
 **Commit audited:** `6bfc49e` ("Add Phase 6: repair workflow (inspection through completion)")
 
-This document is a factual snapshot of what exists in the repository as of the commit above, plus Phase 7 and Phase 8 updates layered on top (marked **"(Phase 7)"** / **"(Phase 8)"** where they change an earlier finding). It was produced by reading the actual code (models, controllers, migrations, routes, views, tests), not by inferring from commit messages or specs. Anything marked **PLANNED / FUTURE** does not exist yet — it is called out explicitly so it is never confused with working functionality.
+This document is a factual snapshot of what exists in the repository as of the commit above, plus Phase 7, Phase 8, and Phase 9 updates layered on top (marked **"(Phase 7)"** / **"(Phase 8)"** / **"(Phase 9)"** where they change an earlier finding). It was produced by reading the actual code (models, controllers, migrations, routes, views, tests), not by inferring from commit messages or specs. Anything marked **PLANNED / FUTURE** does not exist yet — it is called out explicitly so it is never confused with working functionality.
 
 ---
 
 ## 1. Project Overview
 
-A mobile-first web app for a bicycle repair shop. Customers register, add their bicycles, and book repairs by selecting which parts/areas need attention. Workshop staff and technicians review bookings, receive the bike, inspect it, get customer approval on proposed repairs, do the work, run a quality check, and hand the bike back. Every status change is recorded for audit purposes, and (as of Phase 7) customers can see that full audit trail as a chronological repair timeline on their own booking's detail page.
+A mobile-first web app for a bicycle repair shop. Customers register, add their bicycles, and book repairs by selecting which parts/areas need attention. Workshop staff and technicians review bookings, receive the bike, inspect it, get customer approval on proposed repairs, do the work, run a quality check, and hand the bike back. Every status change is recorded for audit purposes, and (as of Phase 7) customers can see that full audit trail as a chronological repair timeline on their own booking's detail page. As of Phase 9, a bicycle's own detail page also surfaces its derived service history — every completed repair it has ever had, plus any repair currently in progress — for both the owning customer and workshop staff.
 
-The application has been built incrementally in seven phases (see commit history), each phase adding one vertical slice of functionality with tests and a manual verification pass. Phase 7 (Customer Repair Tracking + Staff Dashboard Fix) is complete and merged into this branch.
+The application has been built incrementally in nine phases (see commit history), each phase adding one vertical slice of functionality with tests and a manual verification pass. Phase 7 (Customer Repair Tracking + Staff Dashboard Fix), Phase 8 (In-App Notifications), and Phase 9 (Bicycle Service & Repair History) are complete and merged into this branch.
 
 ---
 
@@ -228,7 +228,7 @@ No screen was found to be a stub or placeholder with no working logic behind it,
 - ✅ Appointment date (a single date picker — no time slot or capacity concept, see §12)
 - ✅ View booking history/status
 - ✅ Approve or decline the shop's proposed repairs
-- 🟡 Repair history is just the existing repairs list (`customer.repairs.index`) filtered to that customer — there's no bicycle-specific "past repairs for this bike" view
+- ✅ **(Phase 9)** Per-bicycle service/repair history — `customer.bikes.show` now shows any current (non-completed, non-cancelled) repair(s) separately from a paginated, newest-first list of that bicycle's completed repairs, plus a completed-service count and last-serviced date. See §23.
 
 ---
 
@@ -246,6 +246,7 @@ No screen was found to be a stub or placeholder with no working logic behind it,
 - ✅ Quality check: start → pass (choose pickup or delivery) or fail (sends back to `repair_in_progress` for rework)
 - ✅ Mark picked up / delivered → completed
 - ✅ Full status-change audit trail (`booking_status_histories`, `old_status`/`new_status`/`changed_by`/timestamp per change)
+- ✅ **(Phase 9)** "Previous Repairs for This Bicycle" — the booking detail page (`staff.bookings.show`) now lists that bicycle's other completed repairs (findings, repair items, fulfillment method), newest first, so staff have operational context on a returning bike without leaving the booking they're working on. See §23.
 
 Everything above is implemented for both `staff` and `technician` roles identically — there is no staff-only or technician-only action.
 
@@ -295,11 +296,11 @@ Transitions are not validated against a formal state-transition table/graph — 
 
 ## 16. Tests
 
-Full results as of Phase 8 (run via `php artisan test` against a temporary SQLite database, since no MySQL server is reachable in this sandboxed environment — see `docs/HANDOFF.md` for the native-SQLite test procedure):
+Full results as of Phase 9 (run via `php artisan test` against a temporary SQLite database, since no MySQL server is reachable in this sandboxed environment — see `docs/HANDOFF.md` for the native-SQLite test procedure):
 
 ```
-Tests: 121, Passed: 121, Failed: 0, Assertions: 309
-Duration: ~3.0–3.3s
+Tests: 139, Passed: 139, Failed: 0, Assertions: 356
+Duration: ~4.2s
 ```
 
 Breakdown by file:
@@ -309,9 +310,11 @@ Breakdown by file:
 | `tests/Feature/StaffBookingManagementTest.php` | 28 |
 | `tests/Feature/CustomerNotificationTest.php` | 23 (Phase 8) |
 | `tests/Feature/BookingTest.php` | 14 |
+| `tests/Feature/BicycleServiceHistoryTest.php` | 12 (Phase 9) |
 | `tests/Feature/StaffDashboardTest.php` | 7 (Phase 7) |
 | `tests/Feature/BicycleTest.php` | 7 |
 | `tests/Feature/RoleAccessTest.php` | 7 |
+| `tests/Feature/StaffBicycleHistoryTest.php` | 6 (Phase 9) |
 | `tests/Feature/CustomerRepairTrackingTest.php` | 9 (Phase 7) |
 | `tests/Feature/ProfileTest.php` | 5 |
 | `tests/Feature/Auth/AuthenticationTest.php` | 4 |
@@ -322,14 +325,15 @@ Breakdown by file:
 | `tests/Feature/Auth/PasswordUpdateTest.php` | 2 |
 | `tests/Feature/ExampleTest.php` | 1 |
 | `tests/Unit/ExampleTest.php` | 1 |
-| **Total** | **121** |
+| **Total** | **139** |
 
-**Coverage is strong** on: role-based route access, the full repair-booking wizard (including cross-customer authorization), every staff booking-management transition and its guard conditions (including the two mass-assignment traps that were specifically regression-tested), customer approve/decline + cross-customer authorization, standard Breeze auth flows, the customer repair-tracking page (timeline ordering, minimal-history bookings, the quality-check rework loop rendering every real pass through the loop, inspection/repair-item rendering when present and when absent, ready-for-pickup/delivery and completed states), the staff dashboard's seven stat-tile counts, and — as of Phase 8 — **notifications**: generation on all eight notifiable transitions (data-provider-driven, one case per status), non-generation on internal-only transitions (`inspection`, `quality_check`, `cancelled`, `scheduled`), no notification from booking creation itself, the QC-rework loop producing a second `repair_in_progress`/`repair_completed` notification pair rather than being deduplicated, that a guarded/rejected transition (the controller never reaching `transitionTo()`) leaves no stray notification, newest-first ordering on the notifications index, unread vs. read rendering, cross-customer notification access being rejected (both reading another customer's notification in one's own list and attempting to mark it read), that a notification's redirect still can't bypass `BookingPolicy::view` even if the stored `booking_id` pointed at a booking the notifiable customer doesn't own, mark-as-read-and-redirect behavior, mark-all-as-read scoped to only the authenticated customer, and the nav unread-count badge reflecting only the authenticated customer's own count.
+**Coverage is strong** on: role-based route access, the full repair-booking wizard (including cross-customer authorization), every staff booking-management transition and its guard conditions (including the two mass-assignment traps that were specifically regression-tested), customer approve/decline + cross-customer authorization, standard Breeze auth flows, the customer repair-tracking page (timeline ordering, minimal-history bookings, the quality-check rework loop rendering every real pass through the loop, inspection/repair-item rendering when present and when absent, ready-for-pickup/delivery and completed states), the staff dashboard's seven stat-tile counts, and — as of Phase 8 — **notifications**: generation on all eight notifiable transitions (data-provider-driven, one case per status), non-generation on internal-only transitions (`inspection`, `quality_check`, `cancelled`, `scheduled`), no notification from booking creation itself, the QC-rework loop producing a second `repair_in_progress`/`repair_completed` notification pair rather than being deduplicated, that a guarded/rejected transition (the controller never reaching `transitionTo()`) leaves no stray notification, newest-first ordering on the notifications index, unread vs. read rendering, cross-customer notification access being rejected (both reading another customer's notification in one's own list and attempting to mark it read), that a notification's redirect still can't bypass `BookingPolicy::view` even if the stored `booking_id` pointed at a booking the notifiable customer doesn't own, mark-as-read-and-redirect behavior, mark-all-as-read scoped to only the authenticated customer, and the nav unread-count badge reflecting only the authenticated customer's own count. **As of Phase 9** — **bicycle service history**: completed repairs appearing in a bicycle's history and cancelled/active bookings not appearing as completed service, newest-first ordering (including a same-second tiebreak scenario), an active repair rendered separately from completed history (both the single- and multiple-active-booking cases), the empty state for a bicycle with no history, a history entry's link resolving to the existing `customer.repairs.show` page, the completed-service count and last-serviced date being correct, fulfillment-method rendering derived from status history, cross-customer 403s on both a bicycle's history page and a historical booking reached directly by id, and — on the staff side — the "Previous Repairs" section appearing for staff and technicians alike, excluding both the currently-viewed booking and any cancelled booking, and ordering newest first.
 
 **Areas without test coverage:**
 - No Dusk/browser-level test exists in the repo today (a one-off Playwright script was used during development to verify a specific bug fix, then removed — it is not part of the committed test suite). Phase 7 and Phase 8's manual verification (see each phase's HTTP walkthrough) covered the same ground a browser test would; Phase 8's walkthrough (booking → accept → notification → read → redirect → inspection → approval-required notification → approve → repair → QC rework loop → ready-for-pickup → badge count → mark-all-as-read → cross-customer rejection) was run as a temporary, non-committed feature test exercising the real HTTP kernel end-to-end, then discarded.
 - No test covers the `bicycle_types`/`bicycle_part_categories` seeders directly (they are exercised indirectly via feature tests that depend on seeded/factory data).
-- `npm run build` was run manually for Phase 7 and Phase 8 (succeeds, <1s) — there is no automated frontend test or CI step that runs it. Phase 8 added no new frontend assets/JS — the nav badge and notifications page are plain Blade/Tailwind, same as the rest of the app.
+- `npm run build` was run manually for Phase 7, Phase 8, and Phase 9 (succeeds, <1s each) — there is no automated frontend test or CI step that runs it. Phase 9 added no new frontend assets/JS either — the service-history sections are plain Blade/Tailwind (including Laravel's default Tailwind pagination view), same as the rest of the app.
+- No dedicated test asserts the absence of N+1 queries on the Phase 9 history pages (consistent with the rest of the suite, which doesn't add query-count assertions either) — query efficiency was instead verified by inspecting the eager-load lists in `Customer\BikeController::show()` / `Staff\BookingController::show()` against what each view actually renders per row.
 
 `./vendor/bin/pint --dirty` / a full `pint` pass reports no style violations on the current tree (the project has been kept Pint-clean throughout development, including Phase 7 and Phase 8's changes).
 
@@ -411,21 +415,23 @@ No TODO/FIXME/XXX comments exist anywhere in the codebase (`grep` returned zero 
 | Ready for pickup | ✅ | Pickup and delivery both supported |
 | Customer tracking | ✅ | Phase 7: status badge, submitted/appointment/last-update info, inspection findings + recommended work, itemized proposed repairs with approval state, contextual QC/pickup/delivery/completion messaging, and a full chronological timeline built from `booking_status_histories`. |
 | Staff dashboard accuracy | ✅ | Phase 7: all seven stat tiles are real, efficiently-queried counts (§17.1) |
-| Repair history | 🟡 | Existing bookings list only; no per-bicycle history view |
+| Repair history | ✅ | Phase 9: per-bicycle service history, derived from existing bookings — see §23. |
 | In-app notifications | ✅ | Phase 8: database-backed customer notifications on 8 lifecycle transitions, notifications index page, unread-count nav badge, mark-as-read/mark-all-as-read, cross-customer authorization enforced. Email/SMS/push remain out of scope — see §22. |
+| Bicycle service history | ✅ | Phase 9: `customer.bikes.show` shows current repair(s) separately from a paginated, newest-first completed-service history, plus a completed-service count and last-serviced date; `staff.bookings.show` shows a "Previous Repairs for This Bicycle" section. Derived entirely from existing `bookings` data — no new table. See §23. |
 
 ---
 
 ## 21. Recommended Next Development Phase
 
-Phase 7 (Customer Tracking + Staff Dashboard Fix) and Phase 8 (In-App Notifications) closed the gaps this document previously flagged as the natural next steps. Based on the current state of the app, reasonable candidates for a Phase 9 (not implemented, not started — listed here only as a recommendation per this document's own convention) are, roughly in priority order:
+Phase 7 (Customer Tracking + Staff Dashboard Fix), Phase 8 (In-App Notifications), and Phase 9 (Bicycle Service & Repair History) closed the gaps this document previously flagged as the natural next steps. Based on the current state of the app, reasonable candidates for a Phase 10 (not implemented, not started — listed here only as a recommendation per this document's own convention) are, roughly in priority order:
 
 1. **Per-technician authorization boundary** — restrict a technician to acting only on bookings assigned to them, rather than any staff/technician being able to touch any booking (§6, §19).
-2. **Bicycle delete** and a **per-bicycle repair history view** (§11, §20) — both small, self-contained gaps.
-3. **Delivery channels beyond in-app** — email (or SMS) delivery for the same notification events, now that the database-notification plumbing and the one centralized trigger point (`Booking::transitionTo()`) already exist; would mean adding a `mail` (or other) channel to `via()` in `App\Notifications\BookingStatusUpdated` and, per Phase 8's own explicit scope boundary, introducing queue infrastructure first so mail sending doesn't block the request. Deliberately not started in Phase 8.
+2. **Bicycle delete** (§11, §20) — a small, self-contained gap.
+3. **Delivery channels beyond in-app** — email (or SMS) delivery for the same notification events, now that the database-notification plumbing and the one centralized trigger point (`Booking::transitionTo()`) already exist; would mean adding a `mail` (or other) channel to `via()` in `App\Notifications\BookingStatusUpdated` and, per Phase 8's own explicit scope boundary, introducing queue infrastructure first so mail sending doesn't block the request. Deliberately not started in Phase 8, and not touched by Phase 9.
 4. Splitting `Staff\BookingController` (still the largest controller in the app) if the workflow grows further, and/or formalizing the scattered status-transition guards into a single declarative table (§19) — cleanup, not user-facing.
+5. Scheduled/recurring maintenance reminders, service intervals, mileage tracking, and the other items Phase 9 deliberately left deferred (§23.6) — none of these were started; they'd need real product scoping before being attempted.
 
-This recommendation is **not implemented** — Phase 9 has not been started.
+This recommendation is **not implemented** — Phase 10 has not been started.
 
 ---
 
@@ -485,3 +491,71 @@ One migration: `database/migrations/2026_09_20_000001_create_notifications_table
 ### 22.6 Deferred / explicitly out of scope
 
 Per the phase's own brief, none of the following exist and were not started: email, SMS, WhatsApp, push notifications (Firebase/APNs), WebSockets/Laravel Echo/Pusher, per-notification delivery preferences, scheduled/reminder jobs, queue infrastructure, staff/technician notification inbox or task system, chat, repair photos, GPS tracking, or marketing/promotional notifications. §21 above records "delivery channels beyond in-app" as a possible future phase, not something Phase 8 attempted.
+
+---
+
+## 23. Phase 9 — Bicycle Service & Repair History
+
+Phase 9 gives customers and staff a historical record of a bicycle's previous repairs, derived entirely from the existing `bookings` data set up in earlier phases. No new table was added, and none was needed — see §23.5.
+
+### 23.1 Architecture — derivation, not duplication
+
+A bicycle's service history is not stored anywhere new; it's computed from `Booking` rows that already exist. Three small relations were added to `App\Models\Bicycle` (`app/Models/Bicycle.php`) as the single place this derivation logic lives:
+
+- `bookings(): HasMany` — every booking ever placed for the bicycle, any status. The base relation the other two build on.
+- `completedBookings(): HasMany` — `bookings()->where('status', BookingStatus::Completed)->orderByDesc('updated_at')->orderByDesc('id')`. A booking only reaches `Completed` once it has fully passed through the workshop lifecycle (see the transition diagram in `docs/ARCHITECTURE.md` §7), so this can never include cancelled, abandoned, or still-in-progress work. `updated_at` is used as the completion timestamp rather than adding a new `completed_at` column: `Completed` is a terminal status (no code path transitions a booking away from it), so a completed booking's `updated_at` — already set by `Booking::transitionTo()`'s own `save()` call — never changes again after completion. This is the same "last update" idea `customer.repairs.show` already used for its own timeline (`docs/ARCHITECTURE.md` §10.1), just reused at the bicycle level instead of computed fresh from status history per page.
+- `activeBookings(): HasMany` — `bookings()->whereNotIn('status', [BookingStatus::Completed, BookingStatus::Cancelled])->orderByDesc('updated_at')`. Everything that hasn't reached a terminal status yet — the bicycle's current, unfinished repair(s).
+
+One small helper was added to `App\Models\Booking` (`app/Models/Booking.php`): `fulfillmentMethod(): ?BookingStatus`, which reads the already-loaded `statusHistories` relation for the most recent `ReadyForPickup`/`ReadyForDelivery` entry (there is no dedicated "fulfillment method" column — this is the same status-history-derived pattern `customer.repairs.show`'s `$fulfillmentEntry` already used inline in Phase 7, promoted to a reusable model method now that two more views need it).
+
+No other model, migration, policy, or route was added.
+
+### 23.2 Customer experience (`customer.bikes.show`)
+
+`Customer\BikeController::show()` (`app/Http/Controllers/Customer/BikeController.php`) now loads, in addition to the existing bicycle detail:
+
+- `activeBookings` — the bicycle's current, non-terminal booking(s), rendered in a **"Current Repair" / "Current Repairs"** section (singular/plural chosen by count) above the history, each linking straight to the existing `customer.repairs.show` tracking page. The business rules don't cap a bicycle at one active booking, so this deliberately renders however many exist rather than assuming exactly zero or one.
+- `completedBookings` — a **paginated** (`paginate(10)`, Laravel's standard paginator, `withQueryString()` to keep the query string across pages), newest-first list of the bicycle's completed repairs, eager-loading `repairItems` and `statusHistories` per booking (see §23.4). Rendered under **"Previous Service History"**, each card showing the reference number, completion date, repair items performed, and pickup/delivery outcome (via `fulfillmentMethod()`) — every field sourced from data the repair workflow already captured, nothing invented (no cost/price field exists in the schema, so none is shown).
+- `completedServiceCount` — `$completedBookings->total()` (the paginator's own total, so no extra `count()` query is needed).
+- `lastServiceDate` — one small dedicated query (`$bicycle->completedBookings()->first()?->updated_at`), independent of whichever page of history is currently being viewed.
+
+When `completedServiceCount` is zero, the existing `<x-empty-state>` component renders **"No completed service history yet."** — reusing the same component/wording convention the rest of the app already uses for its other empty states (`BicycleTest`'s `"You haven't added a bicycle yet."`, `CustomerNotificationTest`'s `"No notifications yet"`). A bicycle with an active repair but no completed history still shows that active repair, with the empty state rendered separately underneath — the two sections are independent, never conflated.
+
+Each history card links to the **existing** `customer.repairs.show` page (Phase 7's repair-tracking/timeline view) rather than a new detail page — per the phase's own instruction not to duplicate that page. `BookingPolicy::view` (unchanged) still gates that destination, exactly as it did before Phase 9.
+
+### 23.3 Staff experience (`staff.bookings.show`)
+
+`Staff\BookingController::show()` (`app/Http/Controllers/Staff/BookingController.php`) now additionally loads, scoped to the booking's bicycle and excluding the booking currently being viewed:
+
+- `previousRepairs` — `$booking->bicycle->completedBookings()->where('id', '!=', $booking->id)->with(['repairItems', 'inspection'])->limit(10)->get()`, rendered in a **"Previous Repairs for This Bicycle"** section placed right after the top summary card (bicycle/customer/status), so a technician sees it immediately on opening a returning bike's booking, before any of the workflow-action forms further down the page.
+- `previousRepairsCount` — a separate `count()` query, used only to show "(showing N most recent of M)" when the 10-item cap is actually hit — kept simple rather than adding a second paginated view inside an already-large page, consistent with the phase's "choose the simplest solution" guidance. This is the one place Phase 9 intentionally didn't add full pagination: the operational "what happened last time" use case only needs the most recent few, and the count still tells staff there's more history if it exists.
+
+Each previous-repair card shows the reference number, completion date, inspection findings (truncated to 120 characters via `Illuminate\Support\Str::limit()`), the repair items performed, and the fulfillment outcome — a little more operational detail than the customer view (findings), consistent with §11's "staff may see somewhat more detail" allowance, and nothing beyond what the existing role/access model already permits staff to see on the booking's own detail page. The section is included for both `staff` and `technician` roles identically (no new authorization split was introduced — see §23.4).
+
+The current booking is never listed among its own previous repairs (`where('id', '!=', $booking->id)`), and a cancelled booking for the same bicycle never appears here — only bookings that actually reached `Completed`.
+
+### 23.4 Authorization
+
+No new policy was added, and no existing one was changed.
+
+- **Customer side:** `Customer\BikeController::show()` still opens with `$this->authorize('view', $bicycle)` (`BicyclePolicy::view`, unchanged — `$user->id === $bicycle->user_id`) before any of the new history queries run, so a customer requesting another customer's bicycle 403s exactly as before Phase 9, and never reaches the history-loading code at all. Each history card's link goes through `route('customer.repairs.show', ...)`, which is still gated by the unchanged `BookingPolicy::view` on that route — a customer can't use a bicycle-history link to reach a booking they don't own, the same guarantee Phase 8's notification redirects already relied on. Covered by `test_customer_cannot_view_another_customers_bicycle_service_history` and `test_customer_cannot_reach_another_customers_historical_repair_through_the_history_link` in `tests/Feature/BicycleServiceHistoryTest.php`, and verified again with a live HTTP walkthrough (logged in as one customer, requested another customer's bicycle-history URL and a booking-detail URL directly — both 403).
+- **Staff side:** `staff.bookings.show` is still gated only by the existing `role:staff,technician` route-group middleware — no per-technician restriction was introduced (explicitly out of scope for this phase, per §21/§23.6), consistent with the app's existing "share the workshop area" decision (`docs/PROJECT_STATUS.md` §6). Both `staff` and `technician` accounts see the same "Previous Repairs" section for the same booking — confirmed by `test_staff_can_see_previous_completed_repairs_for_the_bicycle` and `test_technician_can_see_previous_completed_repairs_for_the_bicycle` in `tests/Feature/StaffBicycleHistoryTest.php`, and by a live HTTP walkthrough as both a staff and a technician account.
+
+### 23.5 Database — no migration required
+
+Phase 9 required **zero schema changes**. Every field shown in the new UI (`reference_number`, `status`, `updated_at`, `repair_items.description`, `repair_items.completed_at`, `repair_inspections.findings`, `booking_status_histories.new_status`) already existed and was already used elsewhere in the app (mostly by Phase 7's `customer.repairs.show`). No `service_histories`/`repair_histories` table, no cached `last_service_date`/`completed_service_count` column, and no `completed_at` column on `bookings` were added — completion is represented the same way it already was (the terminal `Completed` status plus that row's own `updated_at`), and the two summary values (count, last-serviced date) are computed with small, cheap queries rather than persisted. This matches the phase's own instruction: prefer relations/scopes/queries over duplicated persistence, and stop and explain before adding a migration if one seemed necessary — one never did.
+
+### 23.6 Query strategy, ordering, and pagination
+
+- **Customer bicycle page:** one query for `activeBookings` (`get()`, unpaginated — a bicycle realistically has very few non-terminal bookings at once), one paginated query pair for `completedBookings` (Laravel's paginator issues a `count` and a `select`), and one small single-row query for `lastServiceDate`. `repairItems` and `statusHistories` are eager-loaded on the `completedBookings` query itself, so rendering N history cards on a page costs a fixed, small number of queries regardless of N (bounded by the page size, 10) rather than growing with N — no per-card query for repair items, fulfillment method, or anything else rendered.
+- **Staff booking page:** two queries scoped to `$booking->bicycle->completedBookings()` (one `get()` with a `limit(10)` and eager-loaded `repairItems`/`inspection`, one `count()`) — same fixed-cost-regardless-of-row-count shape, capped at 10 rows shown.
+- **Ordering:** both `completedBookings()` and the customer/staff views built on it are newest-first (`orderByDesc('updated_at')->orderByDesc('id')`, the trailing `id` tiebreak covers the case of two bookings completed in the same second, exercised by `test_multiple_completed_repairs_are_ordered_newest_first` / `test_previous_repairs_are_ordered_newest_first` in the two new test files, which force identical-looking timestamps via a direct `update()` and still assert a stable order).
+- **Pagination:** the customer history list uses Laravel's standard `paginate(10)` with `withQueryString()`, rendered with `{{ $completedBookings->links() }}` — the exact same pattern `customer.notifications.index` already established in Phase 8 (`paginate(20)` there), reusing Laravel's default Tailwind pagination view rather than introducing anything new. Verified manually by seeding 14 completed bookings for one bicycle and confirming page 1 shows 10, page 2 shows the remaining 4, and `?page=2` round-trips correctly. The staff "Previous Repairs" section deliberately does not paginate (§23.3) — it caps at the 10 most recent and shows a count of how many more exist instead, since it's an embedded context section on an already-large page rather than a dedicated history view.
+
+### 23.7 Terminology
+
+Section headings and labels use customer-friendly language throughout — "Current Repair(s)", "Service History", "Previous Service History", "Last serviced", "Picked up"/"Delivered" — never a raw enum value like `repair_in_progress`. Status badges on active-repair cards reuse the existing `<x-status-badge>` component and its `BookingStatus::label()` strings, unchanged from the rest of the app.
+
+### 23.8 Deferred / explicitly out of scope
+
+Per the phase's own brief, none of the following exist and were not started: manual/imported service-history entries, external workshop records, customer-entered maintenance logs, scheduled/recurring maintenance reminders, mileage/odometer tracking, component wear calculations, predictive maintenance, service intervals, warranty management, parts inventory, invoice/PDF service reports, downloadable certificates, repair photos, new notifications (viewing history never generates one — Phase 8's notification architecture is untouched), technician-specific authorization, or any bicycle deletion/archive changes. §21 above lists per-technician authorization and bicycle delete as the top candidates for a future phase; none of this Phase 9 work depends on them.

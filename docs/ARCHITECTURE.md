@@ -1,6 +1,6 @@
 # Architecture — Bicycle Workshop Management App
 
-This document describes the actual, current architecture of the application as implemented on branch `claude/bicycle-workshop-app-6mp087` (commit `6bfc49e`), updated for Phase 7 (Customer Repair Tracking + Staff Dashboard Fix) and **updated for Phase 8** (In-App Notifications). All diagrams reflect real code — models, relationships, and controller actions that exist and are exercised by the test suite — not a target design. Phase 7 added no new tables, models, routes, or architectural layers; it is purely additive within the existing MVC structure — see §10 below for what changed. Phase 8 added one table (`notifications`, Laravel's standard schema), one model-adjacent notification class, one controller, and three routes — see §11 below.
+This document describes the actual, current architecture of the application as implemented on branch `claude/bicycle-workshop-app-6mp087` (commit `6bfc49e`), updated for Phase 7 (Customer Repair Tracking + Staff Dashboard Fix), Phase 8 (In-App Notifications), and **updated for Phase 9** (Bicycle Service & Repair History). All diagrams reflect real code — models, relationships, and controller actions that exist and are exercised by the test suite — not a target design. Phase 7 added no new tables, models, routes, or architectural layers; it is purely additive within the existing MVC structure — see §10 below for what changed. Phase 8 added one table (`notifications`, Laravel's standard schema), one model-adjacent notification class, one controller, and three routes — see §11 below. Phase 9 added **no new table, model, route, policy, or controller** — it added three relations to `Bicycle`, one helper method to `Booking`, and extended two existing controller actions/views — see §12 below.
 
 ---
 
@@ -60,7 +60,7 @@ app/
 | Model | Table | Key relationships |
 |---|---|---|
 | `User` | `users` | `hasMany` Bicycle, `hasMany` Booking, `morphMany` `Illuminate\Notifications\DatabaseNotification` (via the `Notifiable` trait — `notifications()`/`unreadNotifications()`, Phase 8) |
-| `Bicycle` | `bicycles` | `belongsTo` User, `belongsTo` BicycleType |
+| `Bicycle` | `bicycles` | `belongsTo` User, `belongsTo` BicycleType, `hasMany` Booking (`bookings()`, plus the derived `completedBookings()`/`activeBookings()` — Phase 9, see §12) |
 | `BicycleType` | `bicycle_types` | `hasMany` Bicycle |
 | `BicyclePartCategory` | `bicycle_part_categories` | `hasMany` BicyclePart |
 | `BicyclePart` | `bicycle_parts` | `belongsTo` BicyclePartCategory |
@@ -341,3 +341,57 @@ sequenceDiagram
 ```
 
 This is the only place in the codebase a notification is created — no controller calls `notify()` directly, which is what keeps every current and future transition-triggering action automatically notification-consistent (the failure mode the phase's brief explicitly wanted to avoid: "Controller A changes status + sends notification, Controller B changes status + forgets notification").
+
+---
+
+## 12. Phase 9 — Bicycle Service & Repair History
+
+Phase 9 adds a bicycle's derived service history to the existing customer bicycle page and staff booking page. No new table, model, route, policy, or controller — the smallest architectural footprint of any phase so far (even smaller than Phase 8's), because the requirement was explicitly to present existing data, not to build a new subsystem for it. See `docs/PROJECT_STATUS.md` §23 for the full write-up (exact fields shown, authorization detail, manual verification); this section covers structure/placement only.
+
+### 12.1 New pieces
+
+```
+app/
+  Models/
+    Bicycle.php   + bookings(): HasMany
+                  + completedBookings(): HasMany  (status = Completed, newest first)
+                  + activeBookings(): HasMany      (status not in [Completed, Cancelled])
+    Booking.php   + fulfillmentMethod(): ?BookingStatus  (derived from statusHistories)
+  Http/Controllers/
+    Customer/BikeController.php     show() now also loads activeBookings/completedBookings
+    Staff/BookingController.php     show() now also loads previousRepairs for the bicycle
+resources/views/
+  customer/bikes/show.blade.php     + Current Repair(s) / Service History / Previous Service History
+  staff/bookings/show.blade.php     + Previous Repairs for This Bicycle
+```
+
+No migration, no new Eloquent model, no new policy, no new route. `BicyclePolicy::view` and `BookingPolicy::view` (both unchanged) are what gate the new data — see `docs/PROJECT_STATUS.md` §23.4.
+
+### 12.2 Why relations on `Bicycle`, not a query built inline per controller
+
+`completedBookings()`/`activeBookings()` are defined once on `Bicycle` (rather than as ad-hoc `Booking::where(...)` queries duplicated in both `Customer\BikeController` and `Staff\BookingController`) because both controllers need the identical "completed repairs for this bicycle, newest first" query. This mirrors the existing pattern of putting shared, reusable query logic on the model that owns the relationship (e.g. `Booking::statusHistories()`, already reused by both the staff and customer booking-detail views since Phase 7) rather than introducing a service/repository layer the rest of the app deliberately doesn't have (`docs/ARCHITECTURE.md` §1/§2).
+
+### 12.3 Request flow (example: customer opens a bicycle with service history)
+
+```mermaid
+sequenceDiagram
+    participant Customer as Customer browser
+    participant Ctrl as Customer\BikeController
+    participant Bicycle as Bicycle model
+    participant DB as MySQL
+
+    Customer->>Ctrl: GET /customer/bikes/{bicycle}
+    Ctrl->>Ctrl: $this->authorize('view', $bicycle)
+    Ctrl->>Bicycle: $bicycle->activeBookings()->get()
+    Bicycle->>DB: SELECT * FROM bookings WHERE bicycle_id = ? AND status NOT IN (completed, cancelled)
+    Ctrl->>Bicycle: $bicycle->completedBookings()->with([repairItems, statusHistories])->paginate(10)
+    Bicycle->>DB: SELECT count(*) ... WHERE status = completed
+    Bicycle->>DB: SELECT * ... WHERE status = completed ORDER BY updated_at DESC LIMIT 10
+    Bicycle->>DB: SELECT * FROM repair_items WHERE booking_id IN (...)
+    Bicycle->>DB: SELECT * FROM booking_status_histories WHERE booking_id IN (...)
+    Ctrl->>Bicycle: $bicycle->completedBookings()->first()
+    Bicycle->>DB: SELECT * ... WHERE status = completed ORDER BY updated_at DESC LIMIT 1
+    Ctrl-->>Customer: view with active/completed bookings, count, last-service date
+```
+
+A fixed, small number of queries regardless of how many completed bookings the bicycle has (bounded by the page size) — see `docs/PROJECT_STATUS.md` §23.6 for the equivalent staff-side query shape and the reasoning against N+1.

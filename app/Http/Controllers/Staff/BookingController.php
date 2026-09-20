@@ -43,12 +43,28 @@ class BookingController extends Controller
 
     public function show(Booking $booking): View
     {
+        $booking->load([
+            'user', 'bicycle.bicycleType', 'bicycleParts.bicyclePartCategory', 'statusHistories.changedBy',
+            'assignedTechnician', 'inspection', 'repairItems.addedBy', 'technicianNotes.user',
+        ]);
+
+        // Previous completed repairs for this same bicycle — operational
+        // context so a technician can answer "what happened last time?"
+        // without hunting through the full bookings list. Excludes the
+        // booking currently being viewed.
+        $previousRepairs = $booking->bicycle->completedBookings()
+            ->where('id', '!=', $booking->id)
+            ->with(['repairItems', 'inspection'])
+            ->limit(10)
+            ->get();
+
         return view('staff.bookings.show', [
-            'booking' => $booking->load([
-                'user', 'bicycle.bicycleType', 'bicycleParts.bicyclePartCategory', 'statusHistories.changedBy',
-                'assignedTechnician', 'inspection', 'repairItems.addedBy', 'technicianNotes.user',
-            ]),
+            'booking' => $booking,
             'technicians' => User::where('role', UserRole::Technician)->orderBy('name')->get(),
+            'previousRepairs' => $previousRepairs,
+            'previousRepairsCount' => $booking->bicycle->completedBookings()
+                ->where('id', '!=', $booking->id)
+                ->count(),
         ]);
     }
 

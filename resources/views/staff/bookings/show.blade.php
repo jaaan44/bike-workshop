@@ -58,6 +58,41 @@
         </div>
     </div>
 
+    @if ($previousRepairs->isNotEmpty())
+        <div class="bg-white rounded-xl border border-gray-200 p-4 mb-4">
+            <p class="text-xs font-semibold text-gray-500 uppercase mb-2">
+                Previous Repairs for This Bicycle
+                @if ($previousRepairsCount > $previousRepairs->count())
+                    <span class="normal-case text-gray-400 font-normal">(showing {{ $previousRepairs->count() }} most recent of {{ $previousRepairsCount }})</span>
+                @endif
+            </p>
+            <div class="space-y-3 divide-y divide-gray-100">
+                @foreach ($previousRepairs as $previous)
+                    @php $fulfillment = $previous->fulfillmentMethod(); @endphp
+                    <a href="{{ route('staff.bookings.show', $previous) }}" class="block pt-3 first:pt-0 hover:bg-gray-50 -mx-1 px-1 rounded">
+                        <div class="flex items-start justify-between gap-2">
+                            <p class="text-sm font-medium text-gray-900">{{ $previous->reference_number }}</p>
+                            <p class="text-xs text-gray-400 whitespace-nowrap">{{ $previous->updated_at->format('M j, Y') }}</p>
+                        </div>
+                        @if ($previous->inspection?->findings)
+                            <p class="text-xs text-gray-600 mt-0.5">{{ \Illuminate\Support\Str::limit($previous->inspection->findings, 120) }}</p>
+                        @endif
+                        @if ($previous->repairItems->isNotEmpty())
+                            <p class="text-xs text-gray-500 mt-0.5">
+                                {{ $previous->repairItems->pluck('description')->join(', ') }}
+                            </p>
+                        @endif
+                        @if ($fulfillment)
+                            <p class="text-xs text-gray-400 mt-0.5">
+                                {{ $fulfillment === \App\Enums\BookingStatus::ReadyForPickup ? 'Picked up' : 'Delivered' }}
+                            </p>
+                        @endif
+                    </a>
+                @endforeach
+            </div>
+        </div>
+    @endif
+
     <div class="bg-white rounded-xl border border-gray-200 p-4 mb-4">
         <p class="text-xs font-semibold text-gray-500 uppercase mb-2">Customer Reported Issues</p>
         <div class="space-y-3">
