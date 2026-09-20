@@ -1,6 +1,6 @@
 # Architecture — Bicycle Workshop Management App
 
-This document describes the actual, current architecture of the application as implemented on branch `claude/bicycle-workshop-app-6mp087` (commit `6bfc49e`). All diagrams reflect real code — models, relationships, and controller actions that exist and are exercised by the test suite — not a target design.
+This document describes the actual, current architecture of the application as implemented on branch `claude/bicycle-workshop-app-6mp087` (commit `6bfc49e`), **updated for Phase 7** (Customer Repair Tracking + Staff Dashboard Fix). All diagrams reflect real code — models, relationships, and controller actions that exist and are exercised by the test suite — not a target design. Phase 7 added no new tables, models, routes, or architectural layers; it is purely additive within the existing MVC structure — see §10 below for what changed.
 
 ---
 
@@ -246,3 +246,21 @@ Classification: **Good**, with minor caveats.
 - Forms use appropriate input types (`type="date"`, `type="number"`) to get native mobile pickers.
 
 **Caveats:** the staff `booking show` page (the largest view in the app, with technician assignment, inspection form, repair items, notes, and up to 6 workflow-transition buttons all on one page) is long — functional and still card/section-based, but a lot of vertical scrolling on a phone. No explicit desktop layout adaptation exists (e.g. no multi-column layout at wider breakpoints) — this appears to be an intentional simplicity choice consistent with "mobile-first, avoid over-engineering" rather than an oversight, since the app was never asked to also excel on desktop.
+
+---
+
+## 10. Phase 7 — Customer Repair Tracking + Staff Dashboard Fix
+
+Phase 7 is additive/fix-oriented: no new tables, models, routes, middleware, or policies. Two existing pieces of the app were extended.
+
+### 10.1 Customer repair tracking (`customer.repairs.show`)
+
+`Customer\RepairController::show()` now eager-loads `bicycle.bicycleType`, `bicycleParts.bicyclePartCategory`, `inspection`, `repairItems`, and `statusHistories` (previously: `bicycle`, `bicycleParts.bicyclePartCategory`, `inspection`, `repairItems` — `statusHistories` and `bicycle.bicycleType` are the only additions). The `$this->authorize('view', $booking)` call — the existing `BookingPolicy::view` ownership check — is unchanged; Phase 7 relies on it rather than adding a second authorization mechanism.
+
+`resources/views/customer/repairs/show.blade.php` builds its **repair timeline** entirely from `$booking->statusHistories` (the same `Booking::statusHistories(): HasMany` relationship the staff booking-show page already used) plus one synthetic first entry ("Booking Submitted", timestamped `$booking->created_at`) to cover the fact that a booking's initial `pending` status is set directly in `Booking::booted()` rather than via `transitionTo()`, so no `booking_status_histories` row exists for it — the same gap the staff view papers over with its own hardcoded "Booking Received" first entry. Every subsequent timeline entry is a real, unmodified history row rendered with the existing `BookingStatus::label()` — no new labels, no fabricated timestamps, no deduplication (a quality-check rework loop shows every real pass through `quality_check`/`repair_in_progress`/`repair_completed`).
+
+The rest of the page's new sections (inspection findings/recommended work, itemized proposed repairs with per-item completed/pending state, an "approved on {date}" note derived from the specific `awaiting_customer_approval → repair_in_progress` history row, and contextual quality-check/ready-for-pickup/ready-for-delivery/completed banners) are all computed in a `@php` block at the top of the view from `$booking`'s already-loaded relationships — no controller changes beyond the eager-load list above, no new Eloquent queries per section. The existing "shareable statuses" gate (inspection/repair-item info only visible once staff have sent the booking for approval) is unchanged from the pre-Phase-7 behavior.
+
+### 10.2 Staff dashboard fix (`staff.dashboard`)
+
+`Staff\DashboardController::index()` already ran one grouped query (`Booking::query()->selectRaw('status, count(*) as count')->groupBy('status')->pluck('count', 'status')`) and a `$countFor(BookingStatus $status)` closure over it, but only used that closure for three of the ten non-terminal statuses (`Pending`, `Accepted`, `BikeReceived`) — the view hardcoded the other four tiles to `0`. Phase 7 extends the same closure to the remaining tiles (`awaitingApprovalCount`, `inRepairCount`, `qualityCheckCount`, and `readyCount` — the last summing `ReadyForPickup` + `ReadyForDelivery`, since the UI has always had one combined "Ready" tile for both fulfillment methods) and passes them to the view, which now renders them instead of literal `0`s. No new query was added — the existing single grouped query already had every status's count available; it just wasn't being read.

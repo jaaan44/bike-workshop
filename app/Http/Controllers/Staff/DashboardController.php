@@ -24,6 +24,10 @@ class DashboardController extends Controller
             'newBookingsCount' => $countFor(BookingStatus::Pending),
             'acceptedCount' => $countFor(BookingStatus::Accepted),
             'bikeReceivedCount' => $countFor(BookingStatus::BikeReceived),
+            'awaitingApprovalCount' => $countFor(BookingStatus::AwaitingCustomerApproval),
+            'inRepairCount' => $countFor(BookingStatus::RepairInProgress),
+            'qualityCheckCount' => $countFor(BookingStatus::QualityCheck),
+            'readyCount' => $countFor(BookingStatus::ReadyForPickup) + $countFor(BookingStatus::ReadyForDelivery),
             'activeBookings' => Booking::with(['user', 'bicycle'])
                 ->whereIn('status', [BookingStatus::Accepted, BookingStatus::BikeReceived])
                 ->orderBy('appointment_date')
