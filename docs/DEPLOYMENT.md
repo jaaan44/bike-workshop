@@ -1,12 +1,43 @@
 # Deployment — Bicycle Workshop Management App
 
-**Phase:** 11A — V1 Release & Staging Readiness Audit + Deployment Runbook (audit-only; no application, migration, or server changes).
-**Audit date:** 2026-09-21. **Branch:** `claude/laughing-fermi-xzuztm`, based on the merged Phase 10B baseline, commit `839d2b6f` ("Merge pull request #4 from jaaan44/claude/phase-10b-v1-release-hardening").
-**Target:** the existing DigitalOcean VPS staging deployment at `https://bikeworkshop.storm-ark.com` (HTTPS/Let's Encrypt/Certbot already configured there — this document does not touch that).
+**Phase:** 11C — Deployment Hardening & Operations Cleanup, following the completed real staging deployment.
+**Status:** the app has been **deployed and manually validated** on staging: `https://bikeworkshop.storm-ark.com`, release `3d37101a3ba2ad0b6ecfce222979cc982d667c5a`, branch `claude/bicycle-workshop-app-6mp087`. Sections below marked **[Phase 11A — pre-deployment assumption]** were written before that deployment and are superseded by §0 and the notes layered into each section; they are kept for historical/audit-trail reasons, not as current guidance.
+**This phase's changes are repository-only.** No live/staging VPS was accessed, no SSH or remote server operation was performed, and no application business logic changed — Phase 11C fixes deployment tooling (`Dockerfile`, `docker/entrypoint.sh`, `compose.yaml`, plus a new `compose.override.yaml`) and this runbook, based on lessons from the real deployment described in §0.
 
-This is the authoritative deployment/rollback/validation runbook for the project. Every claim below was verified against the actual repository (config files, `Dockerfile`, `compose.yaml`, `docker/entrypoint.sh`, migrations, routes, tests) in this audit, or against locally-run commands — not assumed from Laravel defaults or from how a "typical" Laravel app is deployed. Where something can only be confirmed by inspecting the live VPS, it is explicitly marked **[Phase 11B — verify on server]**.
+---
 
-**No deployment, migration, or server/DNS/Nginx/Certbot/firewall/`.env` change was made while producing this document.** Phase 11A's only repository changes are this file and small, non-behavioral documentation updates to `docs/PROJECT_STATUS.md`, `docs/HANDOFF.md`, and (if needed) `README.md`.
+## 0. Phase 11C — what changed, and why (read this first)
+
+The real staging deployment (§28's sequence, executed manually against the live VPS, not by this or any automated phase) succeeded, but surfaced three real deployment weaknesses. This phase's repository changes exist to fix or clearly document each one. Nothing here was verified against the live VPS itself (out of scope, §"Status" above) — these are repository-level fixes plus documentation of what was observed and manually corrected on the server.
+
+### 0.1 Stale `public/build` volume — root cause and fix
+
+**What happened:** `compose.yaml` bind-mounts the whole repo over `/var/www/html`, then shadows `vendor/` and `public/build/` with named volumes (`bicycle_workshop_vendor`, `bicycle_workshop_build`) so the image's own build output isn't hidden by the (gitignored, therefore empty-on-checkout) host directories at those paths. Docker's actual behavior for a named volume is: **it is seeded from the image's content only the first time it is used** (i.e. the first time a container mounts an empty/nonexistent volume at that path). Rebuilding the image and recreating the container does **not** re-seed an already-existing, already-populated volume — Docker has no mechanism that does this automatically. During the real deployment, the image was rebuilt with new hashed asset filenames (`app-DLoW7O-p.css` replacing `app-B4CkT01A.css`), but the already-existing `bicycle_workshop_build` volume kept serving the previous deployment's assets until it was manually removed (`docker compose stop app && docker compose rm app && docker volume rm bicycle_workshop_build && docker compose up -d app`) and Docker re-seeded the now-empty volume from the new image.
+
+**Fix (this phase):** the `Dockerfile` now additionally copies its own `vendor/` and `public/build/` into a pristine, never-mounted location, `/opt/release-artifacts/`, alongside a checksum of whatever determines each artifact's content (`composer.lock` for `vendor`, `public/build/manifest.json` for the frontend build — see the `Dockerfile`'s own comments for why those two files). `docker/entrypoint.sh` now compares that checksum against a `.release-checksum` marker it maintains inside each named volume on **every** container start, and refreshes the volume from `/opt/release-artifacts/` whenever they differ (including "volume exists but has no marker yet" — i.e. a volume from before this change, or one Docker seeded natively on first use). A plain `docker compose build && docker compose up -d` can therefore never again leave a rebuilt image's dependencies or assets shadowed by a stale volume — the manual removal step the real deployment required is no longer necessary and should not be needed on future deployments.
+
+This preserves the existing local-dev bind-mount workflow exactly as-is (nothing about editing PHP/Blade/JS source changes) and does not touch the MySQL data volume at all.
+
+### 0.2 Was `vendor/` exposed to the same risk?
+
+**Yes, structurally identical.** `vendor/` is shadowed by its own named volume (`bicycle_workshop_vendor`) for exactly the same reason `public/build` is, and Docker's "seed once, never again" volume behavior applies to it identically. The real deployment did not happen to trigger it (`composer.lock` did not change in that release), but a future release that adds/updates a Composer dependency would hit the same class of bug: the rebuilt image's new `vendor/` would sit unused behind the existing volume's older dependency set, with no error — just subtly wrong/missing classes at runtime. The fix in §0.1 (checksum-compared against `composer.lock`) applies identically to `vendor/` and closes this before it can happen for real.
+
+### 0.3 Network exposure — compose.yaml's staging-safe defaults
+
+**What happened:** the desired staging security posture (app reachable from the host only via `127.0.0.1:8013`; MySQL not published to the host at all) required editing `compose.yaml` directly on the VPS, leaving that checkout permanently and intentionally dirty (`M compose.yaml`) with no way to `git pull` a future update without re-losing or re-applying that edit by hand, plus a stray untracked `compose.yaml.backup-20260920`.
+
+**Fix (this phase):** `compose.yaml`'s own defaults are now the staging-safe ones — `app` publishes only to `127.0.0.1:${APP_PORT:-8013}`, and `mysql` publishes no host port at all. A new, git-tracked `compose.override.yaml` restores the previous local-dev convenience (a host-published MySQL port for GUI clients) — Compose auto-merges any `compose.override.yaml` present next to `compose.yaml` for a plain `docker compose ...` command, with no flag needed. Staging/production sets **one** `.env` line, `COMPOSE_FILE=compose.yaml`, so every `docker compose ...` command there loads only the safe base file and ignores the override — no edit to any tracked file is needed, and a future `git pull`/rebuild never conflicts with or silently reverts a manual security fix again. See §27 and §32 for the network-exposure detail this replaces, and `compose.yaml`/`compose.override.yaml`'s own comments for the mechanism.
+
+This was validated statically with `docker compose config` (default local-dev merge → app on `127.0.0.1:8013` + mysql on `127.0.0.1`-unbound `3348`; `COMPOSE_FILE=compose.yaml` → app on `127.0.0.1:8013` only, no `ports:` key at all for `mysql`) — see §"Docker/Compose validation" for the exact commands and output. It was not deployed or tested against the live VPS.
+
+### 0.4 Other Phase 11C findings (no repository change)
+
+- **`php artisan migrate --force` on every container start:** retained as-is. See §8/§30 for the full reasoning — briefly, migrations here are fast, forward-only, and additive, and the maintenance-mode-first deployment sequence (§28) is what actually protects against surprise schema changes hitting live traffic, not preventing the entrypoint from running `migrate --force`. What changed is documentation, not behavior: §30 more explicitly calls out that `docker compose up -d app` (not just a full deploy) can run migrations against the configured database, so it must never be run casually against a staging/production `.env`.
+- **Backup command:** §21/§28 now specify `mysqldump --no-tablespaces` using the application's own DB user (not root), matching what the real deployment actually needed (a normal `mysqldump` failed without it — the app's DB user lacks the `PROCESS` privilege that tablespace metadata collection requires) and verified by exit code, file size, SHA-256, and the dump's own completion footer. `PROCESS` is deliberately not granted just to make an unqualified `mysqldump` work — `--no-tablespaces` is the correct least-privilege fix, not a workaround to route around.
+- **`.env` backup:** §22 now explicitly calls out backing up the VPS `.env` before any deployment or configuration change, alongside the database backup — not a new requirement, just made explicit as its own checklist step given how the real deployment used it.
+- **`APP_URL`:** §7/§17 already called for `https://bikeworkshop.storm-ark.com`, exactly right — the real deployment briefly ran with the `.env.example` default (`http://localhost:8013`) before this was corrected. No document was wrong; the runbook now calls this out as a specific, easy-to-miss step in the deployment sequence (§28) rather than only in the environment-checklist table.
+- **Legacy `staff@example.com` demo account:** `DemoAccountSeeder::shouldRun()` (§9) is confirmed still correct and was never the cause — this account predates Phase 10B's hardening and was created before that guard existed. §9 now documents how to review/remove such legacy accounts manually; **no repository code was added to auto-delete users**, per this phase's explicit instructions, and no such cleanup was performed against the live database.
+- **Apache `AH00558` `ServerName` warning:** investigated and deliberately left unchanged — see §16 for the conclusion.
 
 ---
 
@@ -22,12 +53,23 @@ Confirmed components (all read directly from the repository):
 |---|---|
 | `Dockerfile` | `php:8.4-apache-bookworm` base image. Installs `pdo_mysql`, `mbstring`, `bcmath`, `zip` PHP extensions, Node 22 (via NodeSource), Composer 2 (copied from the official `composer:2` image). Runs `composer install --optimize-autoloader` (not `--no-dev` — deliberate, see §15) and `npm ci && npm run build` **at image-build time**, then `chown -R www-data:www-data storage bootstrap/cache`. |
 | `docker/apache/000-default.conf` | Apache vhost with `DocumentRoot /var/www/html/public` — Laravel's `public/` is already the web root (§17). |
-| `docker/entrypoint.sh` | Runs on every `app`/`vite` container start. Creates `.env` from `.env.example` only if missing (never overwrites an existing one), generates `APP_KEY` only if missing, `chown`s `storage`/`bootstrap/cache`, waits for MySQL to accept TCP connections, then **always** runs `php artisan migrate --force` (forward-only, confirmed non-destructive — see §8), optionally seeds if `DB_SEED_ON_BOOT=true` (default `false` everywhere including the VPS), then `php artisan config:clear` (not cache — see §13), then hands off to `apache2-foreground`. |
-| `compose.yaml` | `app` (built from `Dockerfile`, published on host port `APP_PORT` default `8013`) + `mysql` (official `mysql:8.4` image, published on host port `DB_FORWARD_PORT` default `3348`, named volume `bicycle_workshop_mysql_data`) + optional `vite` (dev-only, `profiles: ["dev"]`, never started by a plain `up -d`). Every container/volume/network name is prefixed `bicycle_workshop_` because the VPS also runs other, unrelated apps (Pickleverse, Company App) — never touch unprefixed resources. |
+| `docker/entrypoint.sh` | Runs on every `app`/`vite` container start. Creates `.env` from `.env.example` only if missing (never overwrites an existing one), generates `APP_KEY` only if missing, refreshes the `vendor`/`public/build` named volumes from the image whenever they're stale (Phase 11C — see §0.1), `chown`s `storage`/`bootstrap/cache`, waits for MySQL to accept TCP connections, then **always** runs `php artisan migrate --force` (forward-only, confirmed non-destructive — see §8), optionally seeds if `DB_SEED_ON_BOOT=true` (default `false` everywhere including the VPS), then `php artisan config:clear` (not cache — see §13), then hands off to `apache2-foreground`. |
+| `compose.yaml` | `app` (built from `Dockerfile`, published on `127.0.0.1:${APP_PORT:-8013}` — Phase 11C, see §0.3/§27) + `mysql` (official `mysql:8.4` image, no host port published by default — Phase 11C, see §0.3/§27 — named volume `bicycle_workshop_mysql_data`) + optional `vite` (dev-only, `profiles: ["dev"]`, never started by a plain `up -d`). `compose.override.yaml` restores a host-published MySQL port for local dev only (§0.3). Every container/volume/network name is prefixed `bicycle_workshop_` because the VPS also runs other, unrelated apps (Pickleverse, Company App) — never touch unprefixed resources. |
 
-**What this means for "deployment" in practice:** deploying a new commit means rebuilding the `app` image (which reruns `composer install`/`npm run build` inside the image) and recreating the container (whose entrypoint reruns `migrate --force`) — not SSHing in and running `composer install`/`npm run build`/`php artisan migrate` by hand against a bare checkout. The ordered runbook in §26 reflects this.
+**What this means for "deployment" in practice:** deploying a new commit means rebuilding the `app` image (which reruns `composer install`/`npm run build` inside the image) and recreating the container (whose entrypoint reruns `migrate --force`) — not SSHing in and running `composer install`/`npm run build`/`php artisan migrate` by hand against a bare checkout. §28 reflects this.
 
-**Reverse proxy:** `bootstrap/app.php` calls `$middleware->trustProxies(at: '*')`, and the VPS terminates HTTPS via Certbot (per the task brief) somewhere in front of the `app` container's published port. That reverse-proxy layer (Nginx/Apache on the host, its vhost config, and exactly which port it forwards to) is **outside this repository** and is a **[Phase 11B — verify on server]** item (§32) — Phase 11A does not touch it.
+**Reverse proxy and real staging request path (confirmed by the completed staging deployment, not a [Phase 11B] placeholder anymore):**
+
+```
+Internet
+  -> Cloudflare (in front of the staging domain)
+  -> host Nginx, listening on :443 (HTTPS/Let's Encrypt/Certbot — configured on the host, outside this repository)
+  -> 127.0.0.1:8013 (the app container's published port — Phase 11C binds this to loopback only, see §0.3)
+  -> the `app` container's Apache, listening on container port 80
+  -> Laravel
+```
+
+`bootstrap/app.php`'s `$middleware->trustProxies(at: '*')` means Laravel trusts `X-Forwarded-Proto`/`X-Forwarded-Host`/`X-Forwarded-For` from whatever sits immediately in front of it — here, host Nginx — which is exactly why `url()`/`route()`/`asset()` correctly generate `https://bikeworkshop.storm-ark.com/...` links even though Apache inside the container only ever sees plain HTTP. The host Nginx vhost's exact configuration file lives on the VPS, outside this repository, and was not created, inspected, or modified by this phase (per its own repository-only scope) — this section documents the request path that was verified working end-to-end during the real deployment (public HTTPS root and `/up` both returned 200), not the vhost file's literal contents.
 
 ---
 
@@ -203,7 +245,7 @@ All 16 migrations (3 framework + 13 application, per `docs/DATABASE.md`) were re
 1. `php artisan migrate --force` (schema — already automatic via `docker/entrypoint.sh`).
 2. `php artisan db:seed --force` **once**, to populate `bicycle_types`/`bicycle_part_categories`/`bicycle_parts` (idempotent — safe to repeat, see §9). This step is **not** automatic (`docker/entrypoint.sh` only seeds when `DB_SEED_ON_BOOT=true`, which defaults to `false`) — it must be run manually once per environment, exactly as `README.md`'s existing "Demo accounts" section already documents for local dev.
 
-Since the staging site is described as already running, **[Phase 11B — verify on server]** whether this initial `db:seed` has already been run there (i.e., whether `bicycle_types`/`bicycle_part_categories` are already populated) — if the booking wizard's dropdowns are already populated on the live staging site, it has been.
+**Confirmed by the real deployment:** the manually-tested customer booking wizard successfully exercised its bicycle-type/part dropdowns, which requires this initial `db:seed` to have already been run on staging.
 
 ---
 
@@ -239,6 +281,17 @@ This is a pure function (`DemoAccountSeeder::shouldRun(string $environment): boo
 **Recommendation for Phase 11B:** if staging needs staff/technician/customer test accounts for manual QA, create them **manually** (e.g. `php artisan tinker`, exactly as `README.md`'s "Demo accounts" section already recommends for production) with distinct, non-public credentials — never rely on `DemoAccountSeeder`, and never lower `APP_ENV` to `local`/`testing` on a reachable server just to get it to run (doing so would also relax other environment-sensitive behavior, e.g. verbose error handling assumptions some tooling makes around `app()->environment()`). See §25 for a concrete staging test-account naming convention.
 
 **No real password is included anywhere in this document.**
+
+### 9.1 Legacy demo account on staging (Phase 11C finding)
+
+The real staging database currently contains a `staff@example.com` account that **predates** Phase 10B's `DemoAccountSeeder::shouldRun()` guard above — it was not created by a bypass of that guard, and re-verifying the guard in this phase (reading `DemoAccountSeeder::shouldRun()` directly, and its dedicated test) confirms it still works exactly as designed: nothing in the current codebase can recreate a `staff@example.com`/publicly-known-password account against a staging-configured `APP_ENV`.
+
+**Per this phase's explicit scope, no repository code was written to automatically delete existing users** — a seeder or migration whose purpose is deleting user rows is exactly the kind of thing that becomes dangerous the moment it is ever run against the wrong environment, for a problem that is a one-time cleanup, not a recurring one. Instead, if this legacy account should be removed or rotated on staging, do it as a **manual, deliberate** action, separately from any code deployment:
+
+1. Confirm what the account actually is (last login, any bookings/notes it authored) before touching it — `technician_notes` rows authored by a staff/technician account block deletion via the normal profile flow by design (§25's "Hardening" checklist), and the same FK consideration applies to a manual deletion.
+2. Prefer **rotating its password** (`php artisan tinker` → look up the user, set a new `password` via `Hash::make()`, save) over deleting it outright, unless it's confirmed to have no associated workshop data and deletion is genuinely wanted.
+3. Never expose the account's current password, hash, or any other credential value in a commit, an issue, or this documentation.
+4. This is a staging-database action, not a repository change — it is intentionally **not** performed by this phase (which does not access the live VPS) and is called out here so it is not forgotten, not so that it gets automated.
 
 ---
 
@@ -345,8 +398,8 @@ Confirmed by reading `Dockerfile` and `docker/entrypoint.sh` directly (not assum
 
 - **`storage/`** and **`bootstrap/cache/`** are the only two directories the Laravel runtime writes to (logs, compiled views, session/cache-adjacent framework files, sqlite-independent framework bootstrap cache). Both are `chown -R www-data:www-data`'d **twice**: once at image-build time (`Dockerfile` line 48, so a fresh image already has correct ownership) and again on every container start (`docker/entrypoint.sh` line 46 — necessary because the full repo is bind-mounted from the VPS host filesystem, whose ownership can differ from the image's baked-in state).
 - The container runs as **root** (no `USER` directive in `Dockerfile`; Apache's `apache2-foreground` itself drops worker processes to `www-data` per Debian's standard `apache2.conf`, but the entrypoint script and PHP-triggered file writes via Apache's configured user run as `www-data`). This is why the `chown` calls succeed unconditionally — root can always `chown` inside its own container, and because it's a bind mount, that `chown` **also changes ownership on the VPS host filesystem itself**, not just inside the container.
-- **No `chmod -R 777` is used anywhere in this repository** — confirmed by searching `Dockerfile`, `docker/entrypoint.sh`, and `compose.yaml`. Do not introduce one in Phase 11B; the existing `chown`-to-`www-data` pattern is already the correct, narrower approach.
-- **[Phase 11B — verify on server]** which host-level OS user owns the VPS checkout directory that's bind-mounted into the container, and confirm that whichever user performs `git pull`/`git fetch` on the VPS has write access to that same directory (the container's repeated `chown -R www-data:www-data storage bootstrap/cache` changes those two subdirectories' *host-side* ownership to `www-data`'s UID/GID every time the container starts — if the deploying operator's shell user doesn't have compatible permissions on those two subdirectories afterward, a subsequent `git pull` or manual edit could fail with a permissions error inside `storage/`/`bootstrap/cache/` specifically, though a `git pull` itself wouldn't normally touch those gitignored paths).
+- **No `chmod -R 777` is used anywhere in this repository** — confirmed by searching `Dockerfile`, `docker/entrypoint.sh`, and `compose.yaml`. Do not introduce one; the existing `chown`-to-`www-data` pattern is already the correct, narrower approach.
+- **[Still open — verify on server if friction is ever observed]** which host-level OS user owns the VPS checkout directory that's bind-mounted into the container, and confirm that whichever user performs `git pull`/`git fetch` on the VPS has write access to that same directory (the container's repeated `chown -R www-data:www-data storage bootstrap/cache` changes those two subdirectories' *host-side* ownership to `www-data`'s UID/GID every time the container starts). No such friction was reported during the real deployment, which completed its full sequence including a `git`-based source update without issue — a weak positive signal, not a confirmation.
 
 ---
 
@@ -368,7 +421,19 @@ Confirmed via `docker/apache/000-default.conf`:
 
 Apache's document root is already Laravel's `public/` directory, exactly as required — **not** the repository root. `.env`, `composer.json`, `app/`, etc. all live outside the served document root and are therefore never reachable over HTTP through this Apache instance by construction (no separate check needed — this is a structural guarantee of the vhost config, not a runtime behavior that could regress silently).
 
-**[Phase 11B — verify on server]** that the VPS's HTTPS reverse proxy (Nginx/Apache on the host, in front of Certbot) forwards `bikeworkshop.storm-ark.com` to this container's published port (`APP_PORT`, default `8013`) and does not, itself, serve a different document root or bypass the container. This proxy layer is outside the repository and was not inspected or modified in this phase.
+**Confirmed by the completed staging deployment:** the host reverse proxy forwards `bikeworkshop.storm-ark.com` to `127.0.0.1:8013` (the `app` container's published port, per §1's request-path diagram) — both the local root/`  /up` checks and the public HTTPS root/`/up` checks returned 200 after deployment. The reverse proxy's own vhost file lives on the VPS, outside this repository, and was not created or modified by any phase.
+
+### 16.1 Apache `AH00558` `ServerName` warning — investigated, no change made
+
+The `app` container logs `AH00558: apache2: Could not reliably determine the server's fully qualified domain name` on startup. This is Apache's standard notice that no global `ServerName` directive is set anywhere in its configuration (confirmed: neither the base `php:8.4-apache-bookworm` image's default config nor `docker/apache/000-default.conf`, per §16 above, sets one) — Apache falls back to resolving its own hostname, logs the notice, and continues serving normally regardless.
+
+**Conclusion: no action taken, deliberately.** This warning is purely cosmetic in this deployment:
+- The container has exactly one vhost (`docker/apache/000-default.conf`, a single `<VirtualHost *:80>` block with no `ServerName`/`ServerAlias` distinction to make — there is nothing for name-based virtual hosting to disambiguate).
+- Apache never uses its own guessed hostname for anything the application depends on — `APP_URL`/`trustProxies` (§17) are what actually determine every generated URL, not Apache's `ServerName`.
+- The warning does not appear in the request/response path, does not affect HTTP responses, and both local and public HTTPS health checks passed cleanly with it present.
+- Adding a `ServerName` directive (e.g. `ServerName bikeworkshop.storm-ark.com` or `ServerName localhost`) would silence the log line but changes nothing observable about the running application — exactly the kind of Apache change the task's own instructions warn against making "merely to eliminate a harmless warning."
+
+If a future phase wants the log line gone for cleanliness, adding `ServerName localhost` to `docker/apache/000-default.conf` is the safe, minimal way to do it — but Phase 11C found no functional reason to make that change now.
 
 ---
 
@@ -378,9 +443,11 @@ Searched `app/`, `resources/views/`, `routes/` for hardcoded `http://`/`localhos
 
 Every URL in the app is generated via Laravel's `route()`/`url()`/`asset()` helpers (25 distinct usages counted across `resources/views/`), which all key off `APP_URL` and the current request's detected scheme/host — confirmed no view or controller ever concatenates a raw string URL.
 
-**Live-verified HTTPS/proxy correctness (this audit, run locally against `php artisan serve`):** `bootstrap/app.php`'s `$middleware->trustProxies(at: '*')` means the app trusts `X-Forwarded-Proto`/`X-Forwarded-Host`/`X-Forwarded-For` headers from *any* upstream proxy. In the real deployment, this is exactly the mechanism that lets `url()`/`route()`/`asset()` correctly generate `https://bikeworkshop.storm-ark.com/...` links even though the Apache container itself only ever sees plain HTTP internally (per §16's vhost, listening on `*:80`) — **as long as the actual reverse-proxy layer sends `X-Forwarded-Proto: https`**, which is standard behavior for Certbot-fronted Nginx/Apache but is a **[Phase 11B — verify on server]** item, since that proxy config lives outside this repository.
+**Live-verified HTTPS/proxy correctness:** `bootstrap/app.php`'s `$middleware->trustProxies(at: '*')` means the app trusts `X-Forwarded-Proto`/`X-Forwarded-Host`/`X-Forwarded-For` headers from *any* upstream proxy. In the real deployment, this is exactly the mechanism that lets `url()`/`route()`/`asset()` correctly generate `https://bikeworkshop.storm-ark.com/...` links even though the Apache container itself only ever sees plain HTTP internally (per §16's vhost, listening on `*:80`) — **confirmed working**: the public HTTPS root and `/up` both returned 200, and the full customer/staff/tracking/notification workflow was manually verified over HTTPS with no mixed-content issues.
 
-**Mixed-content risk assessment:** none found in application code. The one thing that *would* cause mixed content or broken redirects is `APP_URL` in the real `.env` not exactly matching `https://bikeworkshop.storm-ark.com` (e.g. a stale `http://` scheme, a leftover `:8013` port, or a trailing slash mismatch) — **[Phase 11B — verify on server]** the exact `APP_URL` value in the live `.env`.
+**`APP_URL` correction (Phase 11C finding, confirmed):** the staging `.env` initially carried the `.env.example` default, `APP_URL=http://localhost:8013` (the internal Docker/host endpoint, correct for local dev, wrong for any real deployment), and was corrected during the real deployment to `APP_URL=https://bikeworkshop.storm-ark.com` — the externally-accessible HTTPS URL, exactly as this section already required. **Staging/production `APP_URL` must always be the externally accessible HTTPS URL the public actually visits, never `http://localhost:<port>` or any other internal/Docker-facing address** — a mismatch here is exactly what would cause mixed content or broken redirects, per the assessment below. §28's deployment sequence now calls this out as its own explicit step rather than only as an environment-checklist table entry, since it's easy to deploy successfully and only notice the wrong `APP_URL` once a generated link looks wrong.
+
+**Mixed-content risk assessment:** none found in application code. The one thing that *would* cause mixed content or broken redirects is `APP_URL` in the real `.env` not exactly matching `https://bikeworkshop.storm-ark.com` (e.g. a stale `http://` scheme, a leftover `:8013` port, or a trailing slash mismatch) — confirmed corrected during the real deployment, as above.
 
 ---
 
@@ -413,7 +480,7 @@ Confirmed via `php artisan route:list` — `GET|HEAD up` exists, resolves to the
 - **Recommendation for Phase 11B (an `.env`-only change, not implemented here):** switch to `LOG_STACK=daily` (Laravel's built-in daily-rotation driver, already defined in `config/logging.php` with `max_files` controllable via `LOG_DAILY_DAYS`, default 14) in the real staging/production `.env`, or configure host-level `logrotate` on `storage/logs/laravel.log`. Either is a one-line `.env` change or a host-level ops task — no code change needed.
 - **`LOG_LEVEL`** recommendation: `warning` or `error` for production (see §10) — `debug` is unnecessarily verbose for a live deployment and contributes to the unbounded-growth risk above.
 
-**[Phase 11B — verify on server]:** current size of `storage/logs/laravel.log` on the VPS, current `LOG_LEVEL`/`LOG_STACK` values in the live `.env`, and whether `logrotate` (or equivalent) is already configured at the host level for this or any other app sharing the VPS.
+**[Still open]:** current size of `storage/logs/laravel.log` on the VPS, current `LOG_LEVEL`/`LOG_STACK` values in the live `.env`, and whether `logrotate` (or equivalent) is already configured at the host level for this or any other app sharing the VPS — not part of the real deployment's reported verification, and not something this repository-only phase can check.
 
 ---
 
@@ -431,14 +498,24 @@ The application's only business-critical persistent state is the MySQL database 
 
 customers (`users`), bicycles, bookings, booking items, the full status-history audit trail, repair inspections, repair items, technician notes, and in-app notifications.
 
-**Recommendation (practical, budget-conscious — no backup infrastructure implemented in this phase):**
-- **Method:** a scheduled `mysqldump` of the `bike_workshop` database (via `docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" bike_workshop | gzip > backup-$(date +%F).sql.gz`, or the equivalent using the app's own DB user, which the `mysql:8.4` image's `MYSQL_USER`/`MYSQL_DATABASE` env vars already grant full privileges on its own database), run from the VPS host, not from inside a container that could be recreated mid-backup.
-- **Frequency:** daily is a reasonable minimum for a small workshop's operational data; more frequent (e.g. every few hours) if the shop's booking volume justifies it — this is a judgment call for whoever owns the VPS, not something this repository dictates.
+**Method — confirmed working during the real deployment (Phase 11C update):**
+
+```bash
+docker compose exec mysql sh -c \
+  'mysqldump -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" --no-tablespaces "$MYSQL_DATABASE"' \
+  | gzip > backup-$(date +%F-%H%M).sql.gz
+```
+
+- **Use the application's own DB user (`MYSQL_USER`/`MYSQL_PASSWORD`, already granted full privileges on its own database by the `mysql:8.4` image's env vars), not `root`.** A plain `mysqldump` against this user initially **failed** during the real deployment because the app's DB user lacks the `PROCESS` privilege that `mysqldump` uses by default to collect tablespace metadata — the fix is `--no-tablespaces` (which skips that metadata; it is schema/data-agnostic and does not omit any table's rows), **not** granting `PROCESS` to the application's DB user just to satisfy an unqualified `mysqldump` invocation. Granting `PROCESS` would give that user visibility into other sessions/queries running on the same MySQL server — unnecessary privilege for a backup command that doesn't need it.
+- **Verify every backup**, exactly as the real deployment did: check the command's exit code, the resulting file's size is non-trivial (a near-zero-byte file usually means an auth or privilege failure that didn't otherwise surface), the file's SHA-256 (`sha256sum backup-*.sql.gz`, recorded alongside the backup so a later restore can confirm integrity), and that the uncompressed dump ends with `mysqldump`'s own `-- Dump completed on <timestamp>` footer line (its absence means the dump was truncated or interrupted, and must not be trusted).
+- **Frequency:** daily is a reasonable minimum for a small workshop's operational data; more frequent (e.g. every few hours) if the shop's booking volume justifies it — this is a judgment call for whoever owns the VPS, not something this repository dictates. **Always** take one immediately before any deployment that will migrate the schema (§28).
 - **Retention:** a simple rolling window (e.g. 7 daily + a handful of weekly snapshots) is sufficient for this scale — avoid an elaborate retention policy that itself becomes an operational burden.
 - **Off-server requirement:** backups stored only on the same VPS are not real backups (a VPS-level failure or compromise takes both the live data and its backup with it) — copy dumps to a separate location (e.g. DigitalOcean Spaces, another host, or even a periodically-synced local machine) on whatever cadence the budget allows.
 - **Restore-test requirement:** periodically (e.g. monthly) actually restore a dump into a scratch database and spot-check it — an untested backup is not a verified backup. This is a process recommendation, not something to automate in this phase.
 
-**This phase does not configure any backup tooling, cron job, or off-server sync** — per the task's explicit scope, this section only documents the requirement for Phase 11B (or a dedicated future phase) to implement.
+**Never include a real password, connection string, or backup file's actual content in this repository or in any commit message.** The command above reads credentials from the container's own environment (`$MYSQL_USER`/`$MYSQL_PASSWORD`), never a literal value.
+
+**This phase does not configure any backup tooling, cron job, or off-server sync automation** — this section documents the verified-working command and procedure; scheduling it (e.g. a host `cron` entry) remains an operational task for whoever owns the VPS.
 
 ---
 
@@ -446,7 +523,7 @@ customers (`users`), bicycles, bookings, booking items, the full status-history 
 
 Per §6's storage audit, this application has **no user-uploaded or generated files** to back up. The only filesystem data outside the database that is genuinely non-reproducible is:
 
-- **The VPS's `.env` file** — contains `APP_KEY` (§11) and live database credentials, is git-ignored, and exists only on the server. Losing it without a backup means losing the ability to decrypt existing sessions and reconnect to the database without manual reconfiguration. **Recommendation:** keep a secure, access-controlled copy of the VPS `.env` (e.g. in a password manager or secrets vault, never in git, never in this document) — a Phase 11B/ops task, not something this phase does.
+- **The VPS's `.env` file** — contains `APP_KEY` (§11) and live database credentials, is git-ignored, and exists only on the server. Losing it without a backup means losing the ability to decrypt existing sessions and reconnect to the database without manual reconfiguration. **Back it up before every deployment or configuration change**, alongside the database backup (§21) and as its own explicit step in §28's sequence — a quick `cp .env .env.backup-$(date +%F-%H%M)` kept outside the web-served path (§16 already guarantees `.env` itself isn't web-reachable, but a stray backup copy under `public/` would be) is enough for a same-host safety net; keep a secure, access-controlled copy off the VPS too (e.g. in a password manager or secrets vault, never in git, never in this document) for the same off-server reasoning as §21's database backups.
 - **The `bicycle_workshop_mysql_data` named Docker volume** is the database's on-disk storage — this is what `mysqldump` (§21) already captures at the logical level; a raw volume-level backup is a possible supplementary method but `mysqldump` is the primary, portable recommendation.
 
 **Explicitly not needed:** `vendor/`, `node_modules/`, `public/build/` (all reproducible from git + `docker compose build`), and any other git-tracked source — none of it is runtime-generated data.
@@ -536,37 +613,42 @@ Concrete checklist for Phase 11B, using the app's real route names (`docs/PROJEC
 
 | Item | Status | Notes |
 |---|---|---|
-| `APP_DEBUG=false` | **[Phase 11B — verify on server]** | `.env.example` defaults to `true` (correct for local dev); must be confirmed `false` on the live `.env` |
+| `APP_DEBUG=false` | ✅ Confirmed on staging | Verified during the real deployment (§0/§25) |
 | `.env` not web-accessible | ✅ Structurally guaranteed | Apache's document root is `public/` only (§16); `.env` lives outside it by construction, not by convention |
-| No demo/privileged credentials in production | ✅ Verified by code + test | `DemoAccountSeeder::shouldRun()` (§9) structurally prevents `staff@example.com`-style accounts outside `local`/`testing` |
-| HTTPS working | Already established (out of scope — not touched) | Certbot/Let's Encrypt per the task brief |
+| No demo/privileged credentials in production | ✅ Verified by code + test; see §9.1 for a pre-existing legacy account | `DemoAccountSeeder::shouldRun()` (§9) structurally prevents `staff@example.com`-style accounts outside `local`/`testing` |
+| HTTPS working | ✅ Confirmed (Cloudflare + host Nginx/Certbot, §1) | Public HTTPS root and `/up` both verified 200 |
 | Correct file permissions | ✅ Verified in repo | `storage/`/`bootstrap/cache/` owned by `www-data`, no `777` anywhere (§15) |
-| Database not publicly exposed unnecessarily | ⚠️ **[Phase 11B — verify on server, see below]** | See callout |
+| Database not publicly exposed | ✅ Fixed at the repository level (Phase 11C) | See callout below — `compose.yaml` now publishes no MySQL host port by default at all |
 | Secrets not committed to git | ✅ Verified | `.env`/`.env.backup`/`.env.production` all gitignored; no secrets found anywhere in the repository or git history |
 | No `php artisan serve` as the production web server | ✅ Verified | The Docker image runs Apache (`apache2-foreground`); `php artisan serve` appears nowhere in `Dockerfile`/`compose.yaml`/`docker/entrypoint.sh` |
 
-**Callout — MySQL port exposure (a concrete finding worth Phase 11B's attention, not a blocker):** `compose.yaml` publishes MySQL on the **host's** `DB_FORWARD_PORT` (default `3348`) via `ports: - "${DB_FORWARD_PORT:-3348}:3306"`, and the `app` container similarly on `APP_PORT` (default `8013`) via `ports: - "${APP_PORT:-8013}:80"`. Docker Compose's `"HOST:CONTAINER"` port syntax without an explicit bind address publishes to **all** host network interfaces (`0.0.0.0`), not just `127.0.0.1` — this is standard Docker behavior, not a defect specific to this project, and is exactly why the VPS is expected to run its own firewall (this is consistent with the task brief's own framing that DNS/firewall/Nginx are already configured and out of scope for this phase). **[Phase 11B — verify on server]** that the VPS's firewall (`ufw`, `iptables`, or a DigitalOcean Cloud Firewall) actually blocks external access to `3348` (MySQL) and, ideally, restricts `8013` (the app's plain-HTTP container port, which should only be reached via the HTTPS reverse proxy, not directly) to localhost/internal traffic only. This is not something Phase 11A can verify or fix without SSHing into the server, which is explicitly out of scope for this phase — it is flagged here precisely so Phase 11B does not skip it.
+**Callout — MySQL/app port exposure (Phase 11C: fixed in the repository, see §0.3):** the real staging deployment discovered that achieving the intended posture — app reachable only via `127.0.0.1:8013`, MySQL not published to the host at all — required editing `compose.yaml` directly on the VPS (leaving that checkout permanently `git`-dirty) plus an untracked backup file. `compose.yaml`'s own defaults are now exactly that posture (`app` on `"127.0.0.1:${APP_PORT:-8013}:80"`, no `ports:` key at all for `mysql`); local development regains a host-published MySQL port via the new, git-tracked `compose.override.yaml`, which Compose auto-merges for a plain `docker compose ...` command. **A staging/production host must set `COMPOSE_FILE=compose.yaml` in its own `.env`** so that override never applies there — this is a one-line `.env` change, not a `compose.yaml` edit, and survives every future `git pull` without conflict. The host's own firewall (`ufw`/`iptables`/a cloud firewall) exposing only SSH, HTTP, and HTTPS remains the outer layer of defense regardless — this repository-level fix narrows what Docker itself publishes, it does not replace the firewall.
 
 ---
 
-## 28. Proposed deployment sequence (Phase 11B)
+## 28. Deployment sequence
 
-Ordered for this app's actual Docker-based deployment model (§1), not a generic bare-metal sequence. `<DEPLOY_PATH>`, `<DEPLOY_USER>` are VPS-specific placeholders — **[Phase 11B — verify on server]** their real values.
+Ordered for this app's actual Docker-based deployment model (§1). This reflects both the original Phase 11A planning and the real deployment's actual, executed sequence (§0) — the two matched closely; the differences (stale-volume detection, the `COMPOSE_FILE` step, and the explicit `.env`/`APP_URL` steps) are called out inline below and are exactly what Phase 11C's repository changes now handle automatically or make explicit. `<DEPLOY_PATH>`, `<DEPLOY_USER>` remain VPS-specific placeholders — this repository does not record real VPS paths/usernames.
 
 1. **Verify current health.** `curl -I https://bikeworkshop.storm-ark.com/up` → expect `200`. `docker compose ps` on the VPS → confirm `app`/`mysql` are `healthy`/`running`.
-2. **Confirm the currently deployed commit.** On the VPS, in `<DEPLOY_PATH>`: `git rev-parse HEAD`. **Record this as `PREVIOUS_GOOD_COMMIT`** — required before every deployment (§29).
-3. **Take a database backup** (§21): `docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" bike_workshop | gzip > /path/outside/repo/backup-$(date +%F-%H%M).sql.gz`, then copy it off-server per §21.
-4. **Enable maintenance mode**: `docker compose exec app php artisan down --retry=60` (§24 — safe to do before any further step, since it's file-based and survives the coming rebuild).
-5. **Fetch and check out the target commit**: `git fetch origin <branch>` then `git checkout <target-commit-or-branch>` (or `git pull` if deploying the branch's current tip) in `<DEPLOY_PATH>`.
-6. **Rebuild the image** (bakes `composer install --optimize-autoloader` and `npm ci && npm run build`, per §13/§14 — always rebuild rather than assuming a plain restart is enough, since `vendor/`/`public/build` are protected by named volumes and won't otherwise pick up dependency/asset changes): `docker compose build app`.
-7. **Recreate the container** (this is what actually runs the new code + triggers the entrypoint's `migrate --force`, per §1/§8): `docker compose up -d`. Watch `docker compose logs -f app` during this step specifically to catch a migration failure immediately (§29).
-8. **Verify migrations applied cleanly**: `docker compose exec app php artisan migrate:status` → confirm no `Pending` rows.
-9. **(Optional) Apply the Laravel optimization caches** (§12, verified safe in this audit): `docker compose exec app php artisan config:cache && docker compose exec app php artisan route:cache && docker compose exec app php artisan view:cache`.
-10. **Verify filesystem permissions** were reapplied correctly (the entrypoint already does this automatically, per §15 — this step is a confirmation, not a manual fix): `docker compose exec app ls -la storage bootstrap/cache | head` → confirm `www-data` ownership.
-11. **Exit maintenance mode**: `docker compose exec app php artisan up`.
-12. **Run the health check**: `curl -I https://bikeworkshop.storm-ark.com/up` → expect `200`.
-13. **Perform the smoke tests** (§25) — at minimum the "Public/auth" section on every deploy; the full checklist after any change touching the booking workflow.
-14. **Review logs** for anything unexpected: `docker compose logs --since=30m app` and `tail -100 <bind-mount-path>/storage/logs/laravel.log`.
+2. **Confirm the currently deployed commit.** On the VPS, in `<DEPLOY_PATH>`: `git rev-parse HEAD`. **Record this as `PREVIOUS_GOOD_COMMIT`** — required before every deployment (§29). For this release, `PREVIOUS_GOOD_COMMIT` was `60847e9e5d6ef6cdf6a2ef9c272bf04efad36f95`.
+3. **Back up the VPS `.env`** (§22, Phase 11C addition — this was implicit before, now its own step): `cp .env .env.backup-$(date +%F-%H%M)` outside any web-served path.
+4. **Take a database backup** (§21, Phase 11C — corrected command using the app's own DB user, not root): `docker compose exec mysql sh -c 'mysqldump -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" --no-tablespaces "$MYSQL_DATABASE"' | gzip > /path/outside/repo/backup-$(date +%F-%H%M).sql.gz`, verify it (exit code, size, SHA-256, completion footer — §21), then copy it off-server.
+5. **Enable maintenance mode**: `docker compose exec app php artisan down --retry=60` (§24 — safe to do before any further step, since it's file-based and survives the coming rebuild).
+6. **Fetch and check out the target commit**: `git fetch origin <branch>` then `git checkout <target-commit-or-branch>` (or `git pull` if deploying the branch's current tip) in `<DEPLOY_PATH>`.
+7. **Rebuild the image** (bakes `composer install --optimize-autoloader` and `npm ci && npm run build`, per §13/§14): `docker compose build app`.
+8. **Recreate the container** (this is what actually runs the new code + triggers the entrypoint's `migrate --force`, per §1/§8; **as of Phase 11C, the entrypoint also automatically detects and refreshes a stale `vendor`/`public/build` volume here — see §0.1 — so the manual volume-removal step the first real deployment needed should no longer be necessary**): `docker compose up -d`. Watch `docker compose logs -f app` during this step specifically to catch a migration failure or a "refreshing from image (checksum mismatch...)" line immediately (§29).
+9. **Verify migrations applied cleanly**: `docker compose exec app php artisan migrate:status` → confirm no `Pending` rows.
+10. **Confirm `APP_URL`** (§17, Phase 11C addition — easy to miss, bit the real first deployment): `docker compose exec app php artisan tinker --execute="echo config('app.url');"` (or `grep APP_URL .env`) → must be `https://bikeworkshop.storm-ark.com` exactly, never `http://localhost:<port>` or any other internal address.
+11. **(Optional) Apply the Laravel optimization caches** (§12, verified safe in this audit): `docker compose exec app php artisan config:cache && docker compose exec app php artisan route:cache && docker compose exec app php artisan view:cache`.
+12. **Verify filesystem permissions** were reapplied correctly (the entrypoint already does this automatically, per §15 — this step is a confirmation, not a manual fix): `docker compose exec app ls -la storage bootstrap/cache | head` → confirm `www-data` ownership.
+13. **Verify frontend assets are current** (§13, Phase 11C addition): `docker compose exec app cat public/build/manifest.json` and confirm the hashed asset filenames it references match what `docker compose build app`'s own log output reported — this should now always be true automatically (§0.1), but a quick confirmation costs nothing.
+14. **Exit maintenance mode**: `docker compose exec app php artisan up`.
+15. **Run the health check**: `curl -I https://bikeworkshop.storm-ark.com/up` → expect `200` locally and over the public HTTPS URL.
+16. **Perform the smoke tests** (§25) — at minimum the "Public/auth" section on every deploy; the full checklist after any change touching the booking workflow, exactly as the real deployment's browser smoke test did.
+17. **Review logs** for anything unexpected: `docker compose logs --since=30m app` and `tail -100 <bind-mount-path>/storage/logs/laravel.log`.
+
+**On staging/production, every `docker compose` command above must be run with `COMPOSE_FILE=compose.yaml` set in that host's `.env`** (§0.3/§27) so `compose.override.yaml`'s local-dev-only MySQL port publishing never applies there.
 
 If any step from 7 onward fails, go to §29/§30 rather than improvising.
 
@@ -588,11 +670,26 @@ If any step from 7 onward fails, go to §29/§30 rather than improvising.
 ### Database rollback — be conservative
 **Do not casually run `php artisan migrate:rollback` against a database that has received real production writes since the migration ran.** A migration's `down()` method was written and tested against an empty/test database, not against live rows — a `dropColumn`/`Schema::drop` in a `down()` method (even though, per §8, no current migration's `up()` is destructive, several `down()` methods necessarily are, since they're symmetrical) could silently destroy real customer/booking data that accumulated after the migration ran forward.
 
-**When to restore the pre-deployment backup instead (the generally safer path):** if the application-code rollback above doesn't resolve the issue, or if the failed deployment's migration already wrote data in a new column/table that the application-code rollback's older code doesn't know how to handle correctly, restoring the database backup taken in §28 step 3 is safer than trusting an automatic `down()` migration against data that's no longer in the state it assumes. This does mean accepting the loss of any writes made between the backup and the rollback decision — an explicit, known tradeoff, which is exactly why §21's backup-frequency recommendation and §28's "always back up immediately before deploying" step matter.
+**When to restore the pre-deployment backup instead (the generally safer path):** if the application-code rollback above doesn't resolve the issue, or if the failed deployment's migration already wrote data in a new column/table that the application-code rollback's older code doesn't know how to handle correctly, restoring the database backup taken in §28 step 4 is safer than trusting an automatic `down()` migration against data that's no longer in the state it assumes. This does mean accepting the loss of any writes made between the backup and the rollback decision — an explicit, known tradeoff, which is exactly why §21's backup-frequency recommendation and §28's "always back up immediately before deploying" step matter.
+
+**This release's own rollback baseline, for reference:** `PREVIOUS_GOOD_COMMIT=60847e9e5d6ef6cdf6a2ef9c272bf04efad36f95` (the commit checked out on staging immediately before this deployment), deployed release `3d37101a3ba2ad0b6ecfce222979cc982d667c5a`. A verified pre-deployment database backup was taken before migrating, and the deployment used maintenance mode throughout, per this section's and §28's procedure. Rollback was not needed for this release — the deployment succeeded — but these values are recorded here exactly as §28/§29 require for every future deployment.
 
 ---
 
-## 30. Migration failure handling
+## 30. Migration-on-boot behavior and migration failure handling
+
+**Phase 11C re-examined whether `docker/entrypoint.sh` should keep running `php artisan migrate --force` automatically on every `app` container start, per this phase's explicit instruction to audit rather than assume.** Conclusion: **retained as-is, unchanged.**
+
+**Why keep it:**
+- Every migration in this app is additive-only (§8) — no current migration's `up()` drops or destructively alters anything.
+- The alternative (a separate manual migration step) adds a step an operator can forget, and gains nothing here: `docker compose up -d app` already needs the maintenance-mode-first sequence (§28) around it regardless of whether migrations run inside that same command or as a separate one, because rebuilding/recreating the container itself briefly interrupts service either way.
+- It keeps the deployment procedure simple, which matters for this scale (a single small workshop, one operator, no dedicated ops team) — the task's own guidance favors simplicity here over introducing a second manual gate that mirrors what maintenance mode already provides.
+
+**The real consequence, made explicit rather than left implicit:** because this runs automatically, **any** command that starts or recreates the `app` container — not just a deliberate deployment — can execute pending migrations against whatever database `DB_HOST`/`DB_DATABASE` in the active `.env` currently points to. Concretely: `docker compose up -d app` (or a bare `docker compose up -d`, or Docker/the host restarting the container after a reboot) run against a staging/production `.env` will migrate that database, with no separate confirmation prompt. This is safe **only because**:
+1. Migrations are additive-only (above), so there is nothing for an accidental/unplanned run to destroy going forward, and
+2. §28's procedure always takes a verified backup (§21) before any deployment that could trigger a new migration, so even an unplanned run is recoverable.
+
+**Operator rule this implies (documented, not enforced in code):** never run `docker compose up -d`/`docker compose restart app`/`docker compose build && up` against a staging/production `.env` casually, and never point a staging/production `.env`'s `DB_HOST`/`DB_DATABASE` at a database by copy-pasting an example without checking it first — the entrypoint will migrate whatever it finds, immediately, with no dry-run. If a future migration needs to be reviewed before it ever touches staging data, that review has to happen at the pull-request stage (before the branch is deployed), not at container-start time — this entrypoint has no gate for that.
 
 **Known, verified operational risk:** `docker/entrypoint.sh` runs under `set -euo pipefail` and calls `php artisan migrate --force` unconditionally before handing off to Apache. **If a migration fails partway through, the entrypoint script exits non-zero, the container itself fails to start, and Apache never runs** — this is a real behavior of the current, unmodified entrypoint script (confirmed by reading it), not a hypothetical. A failed migration during `docker compose up -d` therefore does not leave the *old* container running (Compose stops/removes it as part of recreating) — it can result in the site being fully down (connection-refused/502 from the reverse proxy), which is worse than a clean maintenance-mode 503 page. This is exactly why §28's maintenance-mode-first sequence and pre-deployment backup are not optional steps.
 
@@ -614,40 +711,42 @@ If `php artisan migrate --force` fails partway through a deployment:
 Per the task's own instruction, Phase 10's deferred items (accessibility, dashboard UX, `User::role` mass-assignment, `scheduled` status removal, email verification cleanup, per-technician authorization, bicycle archive/delete — full list in `docs/PROJECT_STATUS.md` §26.2) are **not** reproduced here, since none of them affect deployment safety. The only deployment-relevant observations from this audit are already captured above:
 
 - The Docker image intentionally ships dev dependencies (Pint, PHPUnit) in every environment (§14) — a deliberate size/convenience tradeoff, not a defect.
-- `storage/logs/laravel.log` has no rotation configured by default (§19/§20) — an `.env`-level fix Phase 11B can apply without any code change.
-- MySQL's and the app's host ports are published to all interfaces by default Docker Compose behavior (§27) — mitigated entirely by the VPS firewall, which this phase could not inspect.
-- A failed `php artisan migrate --force` currently crashes the `app` container rather than failing gracefully (§30) — worth keeping in mind operationally; not a defect to "fix" via a Phase 11A code change (would be an infrastructure/entrypoint change, out of this audit-only phase's scope), but a real behavior Phase 11B's runbook execution must respect.
+- `storage/logs/laravel.log` has no rotation configured by default (§19/§20) — an `.env`-level fix (`LOG_STACK=daily`) or host `logrotate`, not a code change; still not applied by this phase (it's an ops/`.env` decision, not a deployment-tooling defect).
+- ~~MySQL's and the app's host ports are published to all interfaces by default~~ — **fixed at the repository level in Phase 11C** (§0.3/§27): `compose.yaml`'s defaults now bind the app port to `127.0.0.1` and publish no MySQL host port at all. The host firewall remains the outer layer of defense regardless.
+- A failed `php artisan migrate --force` currently crashes the `app` container rather than failing gracefully (§30) — investigated again in Phase 11C and deliberately left unchanged: the maintenance-mode-first sequence (§28) and mandatory pre-deployment backup (§21) are what actually protect against this, not a change to the entrypoint's failure behavior, and a more graceful failure mode would add complexity disproportionate to this app's scale without removing the need for those same safeguards.
 
-None of these block Phase 11B staging validation — see the Recommendation in the final report.
+None of these block Phase 11C being ready for review — see the final report for the complete list.
 
 ---
 
-## 32. Phase 11B — full list of server-only verification items
+## 32. Server-only verification items (historical — from Phase 11A, before the real deployment)
 
-Everything below cannot be confirmed by repository inspection alone and requires direct (human, or a future phase with explicit SSH authorization) inspection of the live VPS:
+This list was written before the real staging deployment happened. Every item below has since been resolved by that deployment (see §0, §1, §9.1, §17, §25, §27, §28's rollback-baseline note) **except** where marked still-open. It is kept here as a historical record of what Phase 11A correctly identified as needing live verification, not as a current to-do list.
 
-1. Actual PHP version and extension set running in the deployed `app` container (should match §2, but confirm the image actually deployed matches this repository's `Dockerfile`).
-2. The reverse-proxy layer's exact configuration (Nginx or Apache on the host, its vhost, which port it forwards to, and that it sends `X-Forwarded-Proto: https`) — §1, §16, §17.
-3. The live `.env`'s actual values for `APP_ENV`, `APP_DEBUG`, `APP_URL`, `LOG_LEVEL`, `LOG_STACK`, `SESSION_SECURE_COOKIE`, `MAIL_MAILER`, and `DB_SEED_ON_BOOT` — §7, §10, §19.
-4. Whether the initial `php artisan db:seed` (for `bicycle_types`/`bicycle_part_categories`/`bicycle_parts`) has already been run on staging — §8.
-5. VPS firewall rules for `DB_FORWARD_PORT` (3348) and `APP_PORT` (8013) — §27.
-6. Host-level OS user/permissions on the VPS checkout directory, and whether the `chown -R www-data` the entrypoint performs on every boot causes any friction for the deploying operator's own file access — §15.
-7. Current `storage/logs/laravel.log` size and whether any log rotation is already configured at the host level — §19.
-8. MySQL backup method (if any) already in place on the VPS, and its retention/off-server status — §21.
-9. Disk space available on the VPS (relevant to both the ever-growing log file and Docker image storage across rebuilds).
-10. Currently deployed Git commit (to establish the very first `PREVIOUS_GOOD_COMMIT` before Phase 11B's first deployment) — §28/§29.
-11. Whether any manual staff/technician accounts already exist on staging, and under what credentials (never to be recorded in this repository) — §9/§25.
-12. Active Docker/system services on the VPS beyond this app (Pickleverse, Company App, per `docs/PROJECT_STATUS.md`) — confirm no port/volume/network collisions before any Phase 11B deployment action.
+1. ~~Actual PHP version and extension set running in the deployed `app` container~~ — confirmed matching this repository (PHP 8.4, per the task brief's runtime summary).
+2. ~~The reverse-proxy layer's exact configuration~~ — confirmed as host Nginx (behind Cloudflare) forwarding to `127.0.0.1:8013`; see §1's request-path diagram. The vhost file's literal contents remain outside this repository, by design (host-level config, not app config).
+3. ~~The live `.env`'s actual values for `APP_ENV`, `APP_DEBUG`, `APP_URL`~~ — confirmed: `APP_ENV=staging`, `APP_DEBUG=false`, `APP_URL=https://bikeworkshop.storm-ark.com` (corrected during deployment, §17). `LOG_LEVEL`/`LOG_STACK`/`SESSION_SECURE_COOKIE`/`MAIL_MAILER`/`DB_SEED_ON_BOOT` values were not part of the reported verification and remain **[still open — verify directly if needed]**, though none of them are deployment blockers.
+4. ~~Whether the initial `php artisan db:seed` has already been run on staging~~ — implied yes: the booking wizard's dropdowns (bicycle types/parts) were exercised during the manually-verified customer/staff workflow, which requires that lookup data to exist.
+5. VPS firewall rules for the app/MySQL ports — **still recommended to confirm** (`ufw` exposing only SSH/HTTP/HTTPS, per the task's stated desired posture) — this repository cannot verify host firewall state, only what Docker itself publishes (now narrowed, §27).
+6. Host-level OS user/permissions on the VPS checkout directory — **[still open]**, not reported either way; no friction was reported during the real deployment, which is a weak positive signal but not a confirmation.
+7. Current `storage/logs/laravel.log` size and host-level log rotation — **[still open]**, not part of this deployment's scope.
+8. MySQL backup method/retention on the VPS beyond the one-time pre-deployment backup described in §21/§28 — **[still open]**; §21 documents the recommended recurring approach, but whether it's actually scheduled on the VPS is an ops task outside this phase.
+9. Disk space available on the VPS — **[still open]**, not reported.
+10. ~~Currently deployed Git commit (`PREVIOUS_GOOD_COMMIT`)~~ — confirmed: `60847e9e5d6ef6cdf6a2ef9c272bf04efad36f95` (§29).
+11. ~~Whether any manual staff/technician accounts already exist on staging~~ — confirmed yes: a legacy `staff@example.com` account predating Phase 10B exists; see §9.1 for the (manual, out-of-repository) review/cleanup guidance.
+12. Active Docker/system services on the VPS beyond this app (Pickleverse, Company App) — no collision was reported during the real deployment, consistent with the container/volume/network name prefixing (§1) working as designed; not independently re-verified by this phase.
 
 ---
 
 ## 33. Summary — smallest reliable production command set
 
-For quick reference, pulling together §12/§14/§28:
+For quick reference, pulling together §12/§14/§28. Run every command below with `COMPOSE_FILE=compose.yaml` set in that host's `.env` (§0.3/§27), so `compose.override.yaml`'s local-dev-only MySQL port publishing never applies on staging/production:
 
 ```bash
 # Deployment (run from the VPS checkout, <DEPLOY_PATH>)
 docker compose exec app php artisan down --retry=60
+cp .env .env.backup-$(date +%F-%H%M)
+docker compose exec mysql sh -c 'mysqldump -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" --no-tablespaces "$MYSQL_DATABASE"' | gzip > backup-$(date +%F-%H%M).sql.gz
 git fetch origin <branch> && git checkout <target-commit>
 docker compose build app
 docker compose up -d
