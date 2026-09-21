@@ -81,3 +81,4 @@ The full customer + staff repair workflow is implemented end-to-end — registra
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — application structure, models, request flow, repair-workflow state machine (with diagrams)
 - **[docs/DATABASE.md](docs/DATABASE.md)** — schema and ER diagram
 - **[docs/HANDOFF.md](docs/HANDOFF.md)** — short "start here" briefing for picking up development, suitable to hand to another developer or AI session
+- **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** — the authoritative V1 deployment/rollback/validation runbook (Phase 11A), covering runtime requirements, the environment checklist, backup strategy, and the ordered deployment/rollback sequence for the staging VPS
