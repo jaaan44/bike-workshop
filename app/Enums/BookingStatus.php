@@ -18,6 +18,20 @@ enum BookingStatus: string
     case Completed = 'completed';
     case Cancelled = 'cancelled';
 
+    /**
+     * A terminal status is a closed job: nothing about the repair itself
+     * (inspection, repair items, notes, technician assignment) should be
+     * editable once a booking reaches one of these. Only two of the 13
+     * cases are actually terminal — every other status is still "in flight".
+     */
+    public function isTerminal(): bool
+    {
+        return match ($this) {
+            self::Completed, self::Cancelled => true,
+            default => false,
+        };
+    }
+
     public function label(): string
     {
         return match ($this) {

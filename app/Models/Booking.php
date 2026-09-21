@@ -156,6 +156,43 @@ class Booking extends Model
             ?->new_status;
     }
 
+    /**
+     * True when this booking is currently sitting in Inspection specifically
+     * because the customer just declined the proposed repairs (as opposed to
+     * a fresh inspection that hasn't been sent for approval yet). Relies on
+     * statusHistories() already being eager-loaded (it is ordered newest
+     * first, so the latest entry is the most recent transition). Staff
+     * re-saving inspection findings while still in Inspection doesn't create
+     * a new history row (see Staff\BookingController::updateInspection()),
+     * so this stays true across those edits and only clears once staff
+     * re-send for approval (or close the job out).
+     */
+    public function wasJustDeclinedByCustomer(): bool
+    {
+        $latest = $this->statusHistories->first();
+
+        return $this->status === BookingStatus::Inspection
+            && $latest !== null
+            && $latest->old_status === BookingStatus::AwaitingCustomerApproval
+            && $latest->new_status === BookingStatus::Inspection;
+    }
+
+    /**
+     * True when this booking was cancelled after the customer declined the
+     * proposed repairs (via Staff\BookingController::closeDeclinedRepair()),
+     * as opposed to an ordinary pre-work cancellation from Pending/Accepted.
+     * Cancelled is only ever reached from Inspection through that one path,
+     * so a history row recording that specific transition is unambiguous.
+     */
+    public function wasCancelledAfterCustomerDecline(): bool
+    {
+        return $this->status === BookingStatus::Cancelled
+            && $this->statusHistories->contains(
+                fn (BookingStatusHistory $history) => $history->old_status === BookingStatus::Inspection
+                    && $history->new_status === BookingStatus::Cancelled
+            );
+    }
+
     protected function casts(): array
     {
         return [

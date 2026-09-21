@@ -22,7 +22,7 @@ That's it — the app container's entrypoint automatically installs Composer/npm
 - Stop: `docker compose down` (never `docker compose down -v` unless you explicitly want to delete this project's MySQL data volume)
 - Logs: `docker compose logs -f`
 - Run any Artisan command: `docker compose exec app php artisan ...`
-- Demo data isn't seeded automatically (see below) — run it once: `docker compose exec app php artisan db:seed`
+- Demo data isn't seeded automatically (see "Demo accounts" below) — run it once: `docker compose exec app php artisan db:seed`. **Safe to run against any environment**: the lookup data (bicycle types/parts) always seeds, but the demo accounts only seed when `APP_ENV` is `local` or `testing` — running this on a production-configured deployment is a no-op for demo accounts, not a way to accidentally create them
 
 Ports are configurable via `.env` (`APP_PORT`, `DB_FORWARD_PORT`, `VITE_FORWARD_PORT` — see `.env.example`) in case 8013/3348/5175 collide with something else already running on the host.
 
@@ -53,7 +53,7 @@ php artisan serve
 
 ## Demo accounts
 
-Seeded by `php artisan db:seed` (password for all: `password`):
+Seeded by `php artisan db:seed` (password for all: `password`) **only in local/development or testing environments** (`APP_ENV=local` or `APP_ENV=testing`, checked by `database/seeders/DemoAccountSeeder::shouldRun()`). Running `db:seed` against a production-configured environment (`APP_ENV=production` or anything else) does **not** create these accounts — this is deliberate, so a documented, convenient local-dev step can never accidentally create predictable, publicly-known credentials on a real deployment. If you need a real staff/technician account in production, create one manually (e.g. via `php artisan tinker`) with a proper password, not via this seeder.
 
 | Role       | Email                   |
 |------------|--------------------------|
@@ -70,12 +70,12 @@ docker compose exec app ./vendor/bin/pint --dirty   # code style
 
 ## Roles
 
-- **Customer** — registers via `/register` (always created as `customer`; role can't be self-elevated).
-- **Staff** / **Technician** — provisioned manually (e.g. via seeder/tinker) for now; share the workshop area (`/staff/*`) in this first release.
+- **Customer** — registers via `/register` (always created as `customer`; role can't be self-elevated). Self-service account deletion is intentionally unavailable for customers (preserves the workshop's own bicycle/repair records); profile editing and password changes are unaffected.
+- **Staff** / **Technician** — provisioned manually (e.g. via seeder/tinker) for now; share the workshop area (`/staff/*`) in this first release. Self-service account deletion remains available, but is blocked with a clear message for any account that has authored a technician note (that history is kept, not destroyed to permit deletion).
 
 ## Project status
 
-The full customer + staff repair workflow is implemented end-to-end — registration through bicycle management, repair booking, staff booking review, inspection, technician assignment, repair items, quality check, and completion. For the current, accurate state of the project (what's implemented, what isn't, known issues, and recommended next steps), see:
+The full customer + staff repair workflow is implemented end-to-end — registration through bicycle management, repair booking, staff booking review, inspection, technician assignment, repair items, quality check, and completion. Two V1-readiness passes have also been completed: Phase 10A audited the app for release blockers (no code changes) and Phase 10B fixed the five issues that audit found and approved for this release — see `docs/PROJECT_STATUS.md` §24–§26 for what was found, fixed, and deliberately deferred. For the current, accurate state of the project (what's implemented, what isn't, known issues, and recommended next steps), see:
 
 - **[docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md)** — full feature-by-feature audit, this is the primary status document
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — application structure, models, request flow, repair-workflow state machine (with diagrams)

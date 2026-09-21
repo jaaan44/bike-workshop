@@ -1,6 +1,6 @@
 # Architecture — Bicycle Workshop Management App
 
-This document describes the actual, current architecture of the application as implemented on branch `claude/bicycle-workshop-app-6mp087` (commit `6bfc49e`), updated for Phase 7 (Customer Repair Tracking + Staff Dashboard Fix), Phase 8 (In-App Notifications), and **updated for Phase 9** (Bicycle Service & Repair History). All diagrams reflect real code — models, relationships, and controller actions that exist and are exercised by the test suite — not a target design. Phase 7 added no new tables, models, routes, or architectural layers; it is purely additive within the existing MVC structure — see §10 below for what changed. Phase 8 added one table (`notifications`, Laravel's standard schema), one model-adjacent notification class, one controller, and three routes — see §11 below. Phase 9 added **no new table, model, route, policy, or controller** — it added three relations to `Bicycle`, one helper method to `Booking`, and extended two existing controller actions/views — see §12 below.
+This document describes the actual, current architecture of the application as implemented on branch `claude/bicycle-workshop-app-6mp087` (commit `6bfc49e`), updated for Phase 7 (Customer Repair Tracking + Staff Dashboard Fix), Phase 8 (In-App Notifications), Phase 9 (Bicycle Service & Repair History), and **updated for Phase 10B** (V1 Release Hardening). All diagrams reflect real code — models, relationships, and controller actions that exist and are exercised by the test suite — not a target design. Phase 7 added no new tables, models, routes, or architectural layers; it is purely additive within the existing MVC structure — see §10 below for what changed. Phase 8 added one table (`notifications`, Laravel's standard schema), one model-adjacent notification class, one controller, and three routes — see §11 below. Phase 9 added **no new table, model, route, policy, or controller** — it added three relations to `Bicycle`, one helper method to `Booking`, and extended two existing controller actions/views — see §12 below. Phase 10A (2026-09-21) was an audit-only phase (no code changes) — see `docs/PROJECT_STATUS.md` §24 for its findings. Phase 10B (2026-09-21) added **no new table, model, or policy** — one new route/controller action, one new seeder class, two new enum/model helper methods, and hardening changes to two existing controllers and their views — see §13 below.
 
 ---
 
@@ -205,11 +205,16 @@ stateDiagram-v2
     quality_check --> repair_in_progress: staff fails QC (rework)
     ready_for_pickup --> completed: staff marks fulfilled
     ready_for_delivery --> completed: staff marks fulfilled
+    inspection --> cancelled: staff closes a declined repair\n(Phase 10B — only after a decline)
     completed --> [*]
     cancelled --> [*]
 ```
 
 `scheduled` exists as an enum case (with a label and a badge color) but is never set by any code path — it is not part of the diagram above because it is not a reachable state.
+
+**Phase 10B** added the `inspection --> cancelled` edge: `Staff\BookingController::closeDeclinedRepair()` lets staff close a booking the customer declined (no repair performed) rather than leaving it stuck in `inspection` indefinitely. It reuses `cancelled` rather than a new status — see `docs/PROJECT_STATUS.md` §25.5 for the full reasoning — and is only reachable when `Booking::wasJustDeclinedByCustomer()` is true (current status `inspection`, most recent status-history row is specifically the `awaiting_customer_approval → inspection` decline). `Booking::wasCancelledAfterCustomerDecline()` is how views tell this apart from the pre-existing `pending`/`accepted → cancelled` early cancellation, since `inspection → cancelled` is the only transition that path can ever produce.
+
+Also **Phase 10B**: every transition into `completed`/`cancelled` is now a hard stop for `Staff\BookingController`'s five operational-data actions (`assignTechnician`, `updateInspection`, `storeRepairItem`, `completeRepairItem`, `storeTechnicianNote`) — `BookingStatus::isTerminal()` plus a shared `rejectIfTerminal()` guard reject all five once a booking reaches either status, server-side, regardless of what the UI shows (see `docs/PROJECT_STATUS.md` §25.4). This doesn't change the diagram above (no new status, no new transition), only which actions remain available once a booking is terminal.
 
 ### Guard conditions per transition (who can trigger it, and what blocks it)
 
@@ -228,8 +233,9 @@ stateDiagram-v2
 | `quality_check` → `ready_for_pickup`/`ready_for_delivery` | Staff clicks Pass | Current status must be `quality_check`; `fulfillment_method` ∈ {pickup, delivery} |
 | `quality_check` → `repair_in_progress` | Staff clicks Fail | Current status must be `quality_check` |
 | `ready_for_pickup`/`ready_for_delivery` → `completed` | Staff clicks Mark Picked Up/Delivered | Current status must be one of those two |
+| `inspection` → `cancelled` (Phase 10B) | Staff clicks Close — Customer Declined Repair | `Booking::wasJustDeclinedByCustomer()` must be true (current status `inspection`, most recent status-history row is the decline transition) |
 
-Every row above is backed by a passing feature test (both the happy path and the "guard rejects it" path).
+Every row above is backed by a passing feature test (both the happy path and the "guard rejects it" path). **Phase 10B** additionally guards `assignTechnician`, `updateInspection`, `storeRepairItem`, `completeRepairItem`, and `storeTechnicianNote` — none of these change `status`, but each now rejects outright (server-side, not just UI-hidden) once `$booking->status->isTerminal()` (`completed` or `cancelled`) is true.
 
 ---
 
@@ -395,3 +401,81 @@ sequenceDiagram
 ```
 
 A fixed, small number of queries regardless of how many completed bookings the bicycle has (bounded by the page size) — see `docs/PROJECT_STATUS.md` §23.6 for the equivalent staff-side query shape and the reasoning against N+1.
+
+---
+
+## 13. Phase 10B — V1 Release Hardening
+
+Phase 10B added **no new table, model, or policy**. See `docs/PROJECT_STATUS.md` §25 for the full write-up (problem, fix, why a migration was avoided, tests, for each of the five items below); this section covers structure/placement only.
+
+### 13.1 New pieces
+
+```
+app/
+  Enums/
+    BookingStatus.php          + isTerminal(): bool
+  Models/
+    Booking.php                + wasJustDeclinedByCustomer(): bool
+                                + wasCancelledAfterCustomerDecline(): bool
+    User.php                   + technicianNotes(): HasMany
+  Http/Controllers/
+    ProfileController.php      destroy() now rejects customer self-deletion
+                                and staff/technician deletion when
+                                technician notes exist, before ever
+                                reaching $user->delete()
+    Staff/BookingController.php + closeDeclinedRepair()
+                                + rejectIfTerminal() (private guard, called
+                                  by 5 existing actions)
+database/seeders/
+  DemoAccountSeeder.php         NEW — the three demo-account blocks moved
+                                 out of DatabaseSeeder, gated by
+                                 shouldRun(string $environment): bool
+  DatabaseSeeder.php             only calls DemoAccountSeeder::class when
+                                 shouldRun() says so
+routes/web.php
+  + POST /staff/bookings/{booking}/close-declined  (staff.bookings.close-declined)
+resources/views/
+  profile/partials/delete-user-form.blade.php   role-conditional now
+  staff/bookings/show.blade.php                 terminal read-only mode,
+                                                  new close-declined action,
+                                                  cancelled-state messaging
+  customer/repairs/show.blade.php               declined-and-closed
+                                                  messaging + shareable gate
+```
+
+No migration, no new Eloquent model, no new policy. `BicyclePolicy`/`BookingPolicy` (both unchanged) continue to gate everything they already gated; the new restrictions in §25.1/§25.2 are enforced in `ProfileController` directly (there is no `UserPolicy` in this app — see §2), consistent with how the rest of the codebase keeps authorization logic close to the controller action it protects rather than introducing a policy class for a single self-service action.
+
+### 13.2 Why controller-level guards, not new migrations
+
+Both database-adjacent Phase 10A findings (§25.1's `technician_notes.user_id` FK, §25.2's `bicycles`/`bookings` cascade) were fixed without touching the schema:
+- §25.1 could have used `nullOnDelete()` on `technician_notes.user_id` (matching `changed_by`/`inspected_by`/`added_by`), but that requires altering an existing NOT-NULL foreign-key column on the production MySQL database — real migration risk for a fix a controller check achieves with none, and the approved scope explicitly offered this exact fallback.
+- §25.2 could have redesigned the `User`-to-`Booking`/`Bicycle` ownership/cascade relationship (e.g. anonymize-on-delete), but that's a genuine product decision about what "delete my account" should mean for a workshop's own records, explicitly out of scope for this phase.
+
+This keeps Phase 10B's database footprint identical to Phase 9's: zero migrations, same as the "avoid migrations unless genuinely required" instruction each phase since Phase 9 has followed.
+
+### 13.3 Request flow (example: staff closes a declined repair)
+
+```mermaid
+sequenceDiagram
+    participant Staff as Staff browser
+    participant Ctrl as Staff\BookingController
+    participant Booking as Booking model
+    participant DB as MySQL
+
+    Staff->>Ctrl: POST /staff/bookings/{booking}/close-declined
+    Ctrl->>Booking: $booking->wasJustDeclinedByCustomer()
+    Booking->>Booking: status === Inspection && latest history row is the decline transition
+    alt not just declined
+        Ctrl-->>Staff: redirect back with session flash error
+    else just declined
+        Ctrl->>Booking: $booking->transitionTo(BookingStatus::Cancelled)
+        Booking->>DB: BEGIN TRANSACTION
+        Booking->>DB: INSERT booking_status_histories (inspection -> cancelled)
+        Booking->>DB: UPDATE bookings SET status = 'cancelled'
+        Booking->>Booking: BookingStatus::Cancelled->customerNotificationMessage() -> null (no notification)
+        Booking->>DB: COMMIT
+        Ctrl-->>Staff: redirect back with session flash status
+    end
+```
+
+Same funnel as every other transition in the app (§7) — no special-cased status write, no bypass of the audit trail.

@@ -1,7 +1,7 @@
 # Project Status — Bicycle Workshop Management App
 
-**Audit date:** 2026-09-14 (original audit below); updated 2026-09-20 for Phase 7 — Customer Tracking + Staff Dashboard Fix; updated 2026-09-20 for Phase 8 — In-App Notifications; **updated 2026-09-20** for Phase 9 — Bicycle Service & Repair History.
-**Branch audited:** `claude/bicycle-workshop-app-6mp087` (original); Phase 7 developed on `claude/phase-7-customer-tracking-dashboard-xgv1hy`; Phase 8 developed on `claude/phase-8-in-app-notifications-y2zjme`; Phase 9 developed on `claude/bicycle-service-repair-history-9gtkn9`
+**Audit date:** 2026-09-14 (original audit below); updated 2026-09-20 for Phase 7 — Customer Tracking + Staff Dashboard Fix; updated 2026-09-20 for Phase 8 — In-App Notifications; updated 2026-09-20 for Phase 9 — Bicycle Service & Repair History; updated 2026-09-21 for Phase 10A — V1 Readiness & Workflow Hardening Audit (audit-only, no code changes); **updated 2026-09-21** for Phase 10B — V1 Release Hardening.
+**Branch audited:** `claude/bicycle-workshop-app-6mp087` (original); Phase 7 developed on `claude/phase-7-customer-tracking-dashboard-xgv1hy`; Phase 8 developed on `claude/phase-8-in-app-notifications-y2zjme`; Phase 9 developed on `claude/bicycle-service-repair-history-9gtkn9`; Phase 10B developed on `claude/phase-10b-v1-release-hardening`
 **Commit audited:** `6bfc49e` ("Add Phase 6: repair workflow (inspection through completion)")
 
 This document is a factual snapshot of what exists in the repository as of the commit above, plus Phase 7, Phase 8, and Phase 9 updates layered on top (marked **"(Phase 7)"** / **"(Phase 8)"** / **"(Phase 9)"** where they change an earlier finding). It was produced by reading the actual code (models, controllers, migrations, routes, views, tests), not by inferring from commit messages or specs. Anything marked **PLANNED / FUTURE** does not exist yet — it is called out explicitly so it is never confused with working functionality.
@@ -362,9 +362,12 @@ Light review only — not a full security audit. No high-severity issues found.
 - **CSRF**: standard Laravel CSRF middleware applies to all state-changing routes; every form in every Blade view checked includes `@csrf`.
 - **No admin/debug routes are exposed.** `APP_DEBUG=true` in `.env.example` is standard for local dev; this must be set to `false` in the real `.env` used on the VPS (not committed — see `.env.example`'s own guidance) since APP_DEBUG=true on a production-facing deployment leaks stack traces/config to visitors.
 - **No secrets are committed.** `.env` is gitignored and confirmed absent from git history (`git log --all --diff-filter=A --name-only` shows no `.env` was ever added).
-- **Staff/technician actions have no per-user restriction** (§6/§13) — any staff or technician can act on any booking, including one assigned to a different technician. This is a documented design choice for the "first release," not an oversight, but it does mean there's currently no way to restrict a technician to only their own assigned jobs at the authorization layer (only UI sort-order nudges toward it).
-- **Email verification is scaffolded but not enforced** (§5) — not a vulnerability per se (nothing sensitive is gated on it), but worth knowing if a future requirement assumes verified emails.
+- **Staff/technician actions have no per-user restriction** (§6/§13) — any staff or technician can act on any booking, including one assigned to a different technician. This is a documented design choice for the "first release," not an oversight, but it does mean there's currently no way to restrict a technician to only their own assigned jobs at the authorization layer (only UI sort-order nudges toward it). **Deferred** — see §26.2, not addressed by Phase 10B.
+- **Email verification is scaffolded but not enforced** (§5) — not a vulnerability per se (nothing sensitive is gated on it), but worth knowing if a future requirement assumes verified emails. **Deferred** — see §26.2.
 - Validation was spot-checked across `BicycleRequest`, `BookingRequest`, and the inline `$request->validate([...])` calls in `Staff\BookingController` / `Customer\RepairController` — all user input reaching a write path has explicit validation rules; none were found relying on implicit/absent validation.
+- ~~**Seeded demo credentials had no environment guard**~~ — **resolved in Phase 10B** (§25.3): `DatabaseSeeder` only calls `DemoAccountSeeder` when `DemoAccountSeeder::shouldRun(app()->environment())` is true (local/testing only), so a plain `php artisan db:seed` against a production-configured environment no longer creates `staff@example.com`/`password`-style accounts. See §25.
+- ~~**Staff/technician self-service account deletion could throw an uncaught DB exception**~~ — **resolved in Phase 10B** (§25.1): blocked server-side with a clear message when the account has authored technician notes, instead of failing on the raw `technician_notes.user_id` FK constraint.
+- ~~**Customer self-service account deletion silently destroyed the shop's own repair history**~~ — **resolved in Phase 10B** (§25.2): self-service deletion is disabled for customer accounts entirely (both the UI and the controller reject it), so `bicycles`/`bookings` cascade-deletion can no longer be triggered by a customer.
 
 ---
 
@@ -395,7 +398,7 @@ No TODO/FIXME/XXX comments exist anywhere in the codebase (`grep` returned zero 
 | Feature | Status | Notes |
 |---|---|---|
 | Authentication | ✅ | Breeze, session-based; email verification scaffolded but not enforced |
-| Customer profile | ✅ | Breeze default: edit name/email, change password, delete account |
+| Customer profile | 🟡 | Breeze default: edit name/email, change password. Self-service account **deletion is intentionally unavailable for customers** (Phase 10B, §25.2) — preserves workshop repair history; staff/technician deletion remains available. |
 | Bicycle management | 🟡 | Add/edit/view/list all work; no delete |
 | Bicycle types | ✅ | Seeded lookup table (10 types) |
 | Bicycle part categories | ✅ | Seeded lookup table (8 categories, ~50 parts) |
@@ -413,6 +416,7 @@ No TODO/FIXME/XXX comments exist anywhere in the codebase (`grep` returned zero 
 | Repair completion | ✅ | Guarded on all repair items being done |
 | Quality check | ✅ | Pass (pickup/delivery choice) or fail (rework loop) |
 | Ready for pickup | ✅ | Pickup and delivery both supported |
+| Declined-repair closure | ✅ | Phase 10B (§25.4): staff can close a booking the customer declined (`Inspection` reached via a decline) without any repair performed, reusing the existing `Cancelled` status. See `Booking::wasJustDeclinedByCustomer()`/`wasCancelledAfterCustomerDecline()`. |
 | Customer tracking | ✅ | Phase 7: status badge, submitted/appointment/last-update info, inspection findings + recommended work, itemized proposed repairs with approval state, contextual QC/pickup/delivery/completion messaging, and a full chronological timeline built from `booking_status_histories`. |
 | Staff dashboard accuracy | ✅ | Phase 7: all seven stat tiles are real, efficiently-queried counts (§17.1) |
 | Repair history | ✅ | Phase 9: per-bicycle service history, derived from existing bookings — see §23. |
@@ -421,17 +425,17 @@ No TODO/FIXME/XXX comments exist anywhere in the codebase (`grep` returned zero 
 
 ---
 
-## 21. Recommended Next Development Phase
+## 21. Recommended Next Development Phase (pre-Phase-10 view — superseded by §24–§26)
 
 Phase 7 (Customer Tracking + Staff Dashboard Fix), Phase 8 (In-App Notifications), and Phase 9 (Bicycle Service & Repair History) closed the gaps this document previously flagged as the natural next steps. Based on the current state of the app, reasonable candidates for a Phase 10 (not implemented, not started — listed here only as a recommendation per this document's own convention) are, roughly in priority order:
 
-1. **Per-technician authorization boundary** — restrict a technician to acting only on bookings assigned to them, rather than any staff/technician being able to touch any booking (§6, §19).
-2. **Bicycle delete** (§11, §20) — a small, self-contained gap.
-3. **Delivery channels beyond in-app** — email (or SMS) delivery for the same notification events, now that the database-notification plumbing and the one centralized trigger point (`Booking::transitionTo()`) already exist; would mean adding a `mail` (or other) channel to `via()` in `App\Notifications\BookingStatusUpdated` and, per Phase 8's own explicit scope boundary, introducing queue infrastructure first so mail sending doesn't block the request. Deliberately not started in Phase 8, and not touched by Phase 9.
-4. Splitting `Staff\BookingController` (still the largest controller in the app) if the workflow grows further, and/or formalizing the scattered status-transition guards into a single declarative table (§19) — cleanup, not user-facing.
+1. **Per-technician authorization boundary** — restrict a technician to acting only on bookings assigned to them, rather than any staff/technician being able to touch any booking (§6, §19). **Still deferred after Phase 10B** — see §26.2.
+2. **Bicycle delete** (§11, §20) — a small, self-contained gap. **Still deferred after Phase 10B** — see §26.2.
+3. **Delivery channels beyond in-app** — email (or SMS) delivery for the same notification events, now that the database-notification plumbing and the one centralized trigger point (`Booking::transitionTo()`) already exist; would mean adding a `mail` (or other) channel to `via()` in `App\Notifications\BookingStatusUpdated` and, per Phase 8's own explicit scope boundary, introducing queue infrastructure first so mail sending doesn't block the request. Deliberately not started in Phase 8, and not touched by Phase 9 or Phase 10B.
+4. Splitting `Staff\BookingController` (still the largest controller in the app) if the workflow grows further, and/or formalizing the scattered status-transition guards into a single declarative table (§19) — cleanup, not user-facing. **Still deferred after Phase 10B.**
 5. Scheduled/recurring maintenance reminders, service intervals, mileage tracking, and the other items Phase 9 deliberately left deferred (§23.6) — none of these were started; they'd need real product scoping before being attempted.
 
-This recommendation is **not implemented** — Phase 10 has not been started.
+This list predates Phase 10. **Phase 10A** (audit, no code changes) and **Phase 10B** (V1 release hardening) have since been completed — see §24–§26 for what was actually found and fixed. This section is kept as a historical record of the pre-Phase-10 recommendation, per this document's own convention of not deleting superseded content.
 
 ---
 
@@ -559,3 +563,109 @@ Section headings and labels use customer-friendly language throughout — "Curre
 ### 23.8 Deferred / explicitly out of scope
 
 Per the phase's own brief, none of the following exist and were not started: manual/imported service-history entries, external workshop records, customer-entered maintenance logs, scheduled/recurring maintenance reminders, mileage/odometer tracking, component wear calculations, predictive maintenance, service intervals, warranty management, parts inventory, invoice/PDF service reports, downloadable certificates, repair photos, new notifications (viewing history never generates one — Phase 8's notification architecture is untouched), technician-specific authorization, or any bicycle deletion/archive changes. §21 above lists per-technician authorization and bicycle delete as the top candidates for a future phase; none of this Phase 9 work depends on them.
+
+---
+
+## 24. Phase 10A — V1 Readiness & Workflow Hardening Audit
+
+Phase 10A (2026-09-21) was an **audit-only phase**: the repository was inspected, tested, and stress-tested (including live reproduction of failure scenarios via `php artisan tinker`/feature tests), but no application code was changed. Its full findings report — repository baseline, workflow maps, the status-machine bypass check, every finding with severity/evidence/impact/recommendation, the technical-debt review, and the proposed Phase 10B scope — was delivered as a standalone document at the time and is not reproduced verbatim here. The headline results, for context on what Phase 10B (§25) actually addresses:
+
+- Confirmed baseline: 139/139 tests passing, Pint clean, `npm run build` clean, all 16 migrations run cleanly — matching this document's own claims independently, not just re-reading them.
+- No BLOCKER found: no cross-customer data leakage, no authorization bypass, no core workflow that fails to complete, and `Booking::transitionTo()` confirmed as the sole status-write path with no bypass anywhere in `app/`.
+- Three HIGH findings, all newly surfaced (not previously documented anywhere in this file): staff/technician account deletion crashing with an uncaught DB exception when the account authored a technician note; customer account deletion silently, irreversibly destroying the shop's own repair history; and seeded demo credentials (`staff@example.com` / `password`) reachable via this README's own documented setup step with no warning against production use.
+- Five MEDIUM/LOW findings: no server-side guard against editing a `Completed`/`Cancelled` booking's operational data; a confusing, unexplained dead end after a customer declines proposed repairs; missing `id`/`for` label associations on the staff booking-detail page's core input fields; two non-clickable dashboard "Needs Attention" tiles with no visual distinction from the one that is clickable; and `User::role` being mass-assignable (a latent, not-currently-exploitable inconsistency with the codebase's own established pattern of excluding security-sensitive fields from `Fillable`).
+- Technical-debt review confirmed: `scheduled` is genuinely unreachable dead code (recommended for removal, not attempted in Phase 10B — see §26.1); bicycle deletion and per-technician authorization remain correctly deferred; email verification remains harmless dead scaffolding; the stale `@tailwindcss/vite` dependency and root `compose.yaml` findings from earlier audits are unchanged.
+
+## 25. Phase 10B — V1 Release Hardening
+
+Phase 10B (2026-09-21, branch `claude/phase-10b-v1-release-hardening`, based on this branch at `37e138d`) implements the approved subset of Phase 10A's findings: the three HIGH items plus two narrowly-scoped MEDIUM items (terminal-state data integrity, the customer-declined-repair dead end). Every other Phase 10A finding was deliberately left deferred — see §26.2 for the explicit list carried forward, not silently dropped.
+
+### 25.1 Staff/technician account deletion integrity
+
+**Problem:** `technician_notes.user_id` is the only author-type foreign key in the schema without `nullOnDelete()`/`cascadeOnDelete()` (unlike `changed_by`, `inspected_by`, `added_by`, all nullable-and-null-on-delete). Deleting a staff/technician account that had authored any technician note threw an uncaught `Illuminate\Database\QueryException` (FK violation) from the standard Breeze "Delete Account" flow (`DELETE /profile`, `auth`-only, open to every role).
+
+**Fix (no migration):** `ProfileController::destroy()` now checks `$user->technicianNotes()->exists()` (a new `User::technicianNotes(): HasMany` relation) before attempting deletion. If any exist, the request is rejected with a clear validation error (`$errors->userDeletion->get('account')`) instead of reaching the database at all — the note is never touched, so it's preserved exactly as before, not destroyed to permit deletion. An account with no technician notes deletes exactly as before. The check is server-side in the controller, not just a hidden UI button, so a crafted request (e.g. omitting fields, hitting the route directly) is rejected the same way.
+
+**Why a migration was avoided:** adding `nullOnDelete()` to `technician_notes.user_id` (matching the other three author FKs) was considered and would also have worked, but requires altering an existing NOT-NULL foreign-key column's nullability — a schema change with real migration risk on the production MySQL database for a fix that a controller-level check achieves just as safely, with zero schema risk, and satisfies the requirement's own stated fallback ("provide a clear UI validation/error message rather than allowing the database constraint to fail"). No large employee-lifecycle/archival subsystem was introduced.
+
+**Tests:** `tests/Feature/ProfileTest.php::test_technician_with_a_technician_note_cannot_delete_their_account` (blocked, note preserved), `::test_staff_without_technician_notes_can_delete_their_account` (unaffected accounts still delete normally), `::test_correct_password_must_be_provided_to_delete_account` (updated to a staff account, since customers are now blocked earlier — see §25.2).
+
+### 25.2 Customer self-deletion / workshop record preservation
+
+**Problem:** `bicycles.user_id` and `bookings.user_id` both `cascadeOnDelete()`. A customer deleting their own account (the same standard Breeze flow, previously available to every role) permanently, silently destroyed every bicycle, booking, inspection, repair item, note, and status-history row they owned — including fully completed repairs the workshop has an operational/warranty interest in keeping.
+
+**Fix (no migration, no cascade change):** per the approved scope's explicit preference, self-service account deletion is disabled entirely for customer accounts rather than redesigning the ownership/cascade model. `ProfileController::destroy()` rejects the request immediately (before any password check) when `$user->isCustomer()`, with a clear message (`"Account deletion isn't available for customer accounts in this release. Contact the workshop if you'd like your account closed."`) — enforced server-side, so a crafted request (even one omitting the password field entirely) is rejected the same way. `resources/views/profile/partials/delete-user-form.blade.php` replaces the destructive button/modal with an explanatory note for customers; profile editing (name/email/phone) and password changes are completely unaffected (`ProfileController::update()` was not touched). Staff/technician deletion remains available, subject only to §25.1's guard.
+
+**Why disabling rather than redesigning:** anonymizing the account instead of deleting it, or otherwise decoupling business records from the `User` row, is a genuine product decision (what counts as "close my account" for a workshop's own audit trail) rather than a pure bug fix, and was explicitly out of scope for Phase 10B ("do NOT design a complicated GDPR/anonymization/account-retention subsystem"). Disabling the destructive path is the smallest change that fully satisfies the requirement (bicycles/bookings/inspections/repair items/status history all provably preserved) without guessing at that product decision.
+
+**Tests:** `tests/Feature/ProfileTest.php::test_customer_cannot_delete_their_account` (rejected, bicycle/booking rows still in the database), `::test_customer_cannot_delete_their_account_even_with_a_crafted_request` (no password field at all — still rejected before any other validation), `::test_delete_account_button_is_not_shown_to_customers` / `::test_delete_account_button_is_shown_to_staff` (UI), plus `test_profile_information_can_be_updated`/`test_email_verification_status_is_unchanged_when_the_email_address_is_unchanged` (both pre-existing, unmodified, still passing — proving profile editing is unaffected).
+
+### 25.3 Demo/seed credential production safety
+
+**Problem:** `DatabaseSeeder::run()` unconditionally created `customer@example.com`/`staff@example.com`/`technician@example.com` (password `password` for all) on every `php artisan db:seed` call, and the README's own documented setup flow (`docker compose exec app php artisan db:seed`) gave no indication this was unsafe against a real deployment's database.
+
+**Fix (no migration):** the three demo-account creation blocks moved unchanged into a new `database/seeders/DemoAccountSeeder.php`. `DatabaseSeeder::run()` still always seeds `BicycleTypeSeeder`/`BicyclePartSeeder` (real lookup data every environment needs), but now only calls `DemoAccountSeeder` when `DemoAccountSeeder::shouldRun(app()->environment())` returns true — a pure function checking the environment name is `local` or `testing`. A plain `php artisan db:seed` in local development (where `APP_ENV=local`) behaves exactly as before, with zero added friction; the same command against a production-configured environment (`APP_ENV=production`) now silently skips demo-account creation instead of creating predictable privileged credentials. `shouldRun()` takes the environment name as a plain string argument rather than reading `app()->environment()` internally, specifically so it can be unit-tested without mutating global application state.
+
+**Documentation:** `README.md`'s "Demo accounts" section now states explicitly that this step only runs in local/testing environments and is a no-op otherwise (see §27 documentation list).
+
+**Tests:** `tests/Unit/DemoAccountSeederTest.php` (the guard's pure logic, called with literal environment-name strings — `local`/`testing` → true, `production`/`staging`/empty string → false — deliberately avoiding brittle `app()->environment()`/`config()` manipulation), `tests/Feature/DatabaseSeederTest.php` (end-to-end: seeding in the actual test environment, which is `testing`, still creates the demo accounts, and running it twice doesn't duplicate them — proving the wiring between `DatabaseSeeder` and `DemoAccountSeeder` actually holds). The "production is guarded" half is proven directly by the unit test rather than by faking `APP_ENV` in a feature test.
+
+### 25.4 Terminal-state data integrity
+
+**Problem:** none of `Staff\BookingController`'s `assignTechnician()`, `updateInspection()`, `storeRepairItem()`, `completeRepairItem()`, or `storeTechnicianNote()` checked the booking's status at all. The view hid their forms for `Pending`/`Accepted`/`Cancelled`, but not for `Completed` — so a completed job's inspection findings, repair-item list, technician notes, and technician assignment could still be silently altered after the customer had picked up the bicycle, via a direct request regardless of what the UI showed.
+
+**Fix (no migration):** `BookingStatus::isTerminal(): bool` (true only for `Completed`/`Cancelled`) is the new single source of truth for "this job is closed." A new private `Staff\BookingController::rejectIfTerminal()` guard, called first in each of the five actions above, rejects the request with a clear flash error (`"This repair is closed and can no longer be edited."`) whenever the booking's current status is terminal — checked server-side, not just hidden in the view. `resources/views/staff/bookings/show.blade.php` now shows the same four sections (technician assignment, inspection, repair items, notes) for every non-`Pending`/`Accepted` status, including `Completed` and `Cancelled` (previously `Cancelled` was hidden outright, which — now that a booking can reach `Cancelled` after inspection via §25.4/§25.5's declined-repair path — would have hidden real historical data), but renders them **read-only** (no forms, no buttons) whenever `$booking->status->isTerminal()` is true, so legitimate read-only access to a closed job's own record is preserved rather than blocked. Incidentally, while rewriting these exact form fields for the read-only branch, the Findings/Recommended-Repairs textareas and the repair-item/note inputs were given proper `id`/`for`/`aria-label` associations (Phase 10A's §10/§F10 accessibility finding on this same markup) — a narrowly-scoped fix tied directly to code this phase was already rewriting, not a general accessibility pass (which remains deferred, §26.2).
+
+**Tests:** `tests/Feature/StaffBookingManagementTest.php::test_completed_booking_rejects_all_operational_edits` (all five actions, via real HTTP requests, none persist any change), `::test_cancelled_booking_rejects_all_operational_edits`, `::test_active_booking_remains_editable` (a non-terminal status is unaffected — regression guard against over-scoping), `::test_completed_booking_is_still_visible_read_only_to_staff` (findings/repair items still render, "Mark Done" does not).
+
+### 25.5 Customer-declined repair workflow
+
+**Phase 10A evidence reviewed:** after a customer declines proposed repairs (`Customer\RepairController::decline()`, `awaiting_customer_approval → inspection`), the booking landed back in `Inspection` with no staff action available beyond re-sending the same (or a revised) proposal for approval again. If the customer's intent was simply "I don't want any repair done, return my bicycle as-is," the workshop had no way to conclude that job — it would sit in `Inspection` indefinitely, or a staff member would have to send a proposal for approval a second time purely to get a status the customer could then decline again, which is not a real resolution.
+
+**Design decision — reusing `Cancelled`, not a new status:** `Cancelled` already means exactly "this booking is not proceeding to have work done" everywhere else in the app: `Bicycle::activeBookings()` excludes it, `Bicycle::completedBookings()` excludes it (so it can never be mistaken for completed service), `Staff\JobController::index()` excludes it from the active jobs list, no dashboard tile counts it, and `BookingStatus::customerNotificationMessage()` already returns `null` for it (so no notification fires — unchanged, and correct, since the customer who declined already knows the outcome). Every one of these was checked directly, not assumed, before deciding reuse was safe. `Completed` was ruled out because it would falsely claim repair work was performed (no repair items are ever marked done on a declined job).
+
+**Fix (no migration, one new status-derived action, no new enum case):**
+- `Staff\BookingController::closeDeclinedRepair()` (route `POST /staff/bookings/{booking}/close-declined`, name `staff.bookings.close-declined`) transitions the booking to `Cancelled` via the normal `Booking::transitionTo()` funnel (so the audit trail and notification logic both apply exactly as they do for every other transition). It only accepts the transition when `Booking::wasJustDeclinedByCustomer()` is true — the booking's current status is `Inspection` *and* the single most recent status-history row is specifically the `awaiting_customer_approval → inspection` decline transition (staff editing inspection findings afterward doesn't create a new history row, so the guard correctly stays available through revisions, and correctly disappears the moment staff re-send for approval or the job is closed).
+- `Booking::wasCancelledAfterCustomerDecline()` recognizes the resulting state by checking for an `inspection → cancelled` history row — the *only* path that can ever produce that specific transition, since the pre-existing `cancel()` action only fires from `Pending`/`Accepted`. This is what lets both the staff and customer views distinguish "declined and closed" from an ordinary early-stage cancellation without any new column.
+- `resources/views/staff/bookings/show.blade.php` gets a new "Close — Customer Declined Repair" button (with a confirmation modal, alongside — not instead of — "Send for Customer Approval") whenever `wasJustDeclinedByCustomer()` is true, and a distinct explanatory message on a `Cancelled` booking's action area depending on which path produced it.
+- `resources/views/customer/repairs/show.blade.php` gets a matching `Cancelled`-status message ("You declined the proposed repairs ... your bicycle was returned without repair" vs. a plain "This booking was cancelled" for the ordinary case), and the declined-and-closed case is added to the page's "shareable" gate so the declined proposal itself stays visible for reference (not the ordinary `Cancelled` case, which never has proposal data to show).
+
+**Why this is semantically correct:** the booking's status history — the app's one authoritative audit trail — records the real sequence exactly as it happened (`awaiting_customer_approval → inspection` on decline, `inspection → cancelled` on closure), nothing is backdated or synthesized, and every downstream consumer of `status`/`completedBookings()`/`activeBookings()`/dashboard counts/notifications already treats `Cancelled` the way this outcome needs to be treated, with no special-casing required anywhere except the two new view messages.
+
+**Tests:** `tests/Feature/DeclinedRepairWorkflowTest.php` (9 tests) — the guard rejecting a non-declined booking, the full close flow, the exact status-history sequence, staff/customer messaging, exclusion from completed service history and active bookings, no notification fires, exclusion from the staff jobs list, and — critically — that an ordinary early-stage cancellation is never mistaken for a decline.
+
+### 25.6 What Phase 10B deliberately did not touch
+
+No migration was created (§25.1–§25.5 each explain why a code-level fix was sufficient). `bookings`/`bicycles` FK cascade behavior is unchanged. No new `BookingStatus` enum case was added. Phases 7, 8, and 9's own functionality (customer tracking, dashboard counts, notifications, service history, pagination, authorization) were not modified — only `staff/bookings/show.blade.php` and `customer/repairs/show.blade.php` gained new conditional branches; their existing branches are untouched, and every pre-existing test for them (§25.7) still passes unmodified.
+
+### 25.7 Regression confirmation
+
+All 139 pre-Phase-10B tests still pass unmodified except two in `tests/Feature/ProfileTest.php` (`test_user_can_delete_their_account` renamed/adapted to `test_staff_without_technician_notes_can_delete_their_account`, and `test_correct_password_must_be_provided_to_delete_account` switched from a customer to a staff account) — both changes are required by §25.2 itself (customers can no longer self-delete at all, so a test asserting they could is testing removed behavior, not a regression). `tests/Feature/CustomerRepairTrackingTest.php`, `tests/Feature/StaffDashboardTest.php`, `tests/Feature/CustomerNotificationTest.php`, `tests/Feature/BicycleServiceHistoryTest.php`, and `tests/Feature/StaffBicycleHistoryTest.php` (Phases 7–9's own test files) all pass unmodified and unchanged. Final count: **161 tests, 442 assertions, all passing** (139 + 22 new).
+
+---
+
+## 26. Phase 10 Disposition — What Was Fixed vs. Deferred
+
+### 26.1 Resolved in Phase 10B
+
+- Staff/technician account deletion no longer throws an uncaught DB exception (§25.1).
+- Customer account deletion can no longer destroy workshop repair history (§25.2).
+- Seeded demo credentials are no longer created outside local/testing environments (§25.3).
+- Terminal (`Completed`/`Cancelled`) bookings can no longer have operational data edited via a direct request (§25.4).
+- A customer-declined repair can now be explicitly closed out by staff, with accurate history and messaging on both sides (§25.5).
+
+### 26.2 Explicitly deferred (Phase 10A findings intentionally not implemented in Phase 10B)
+
+Per Phase 10B's own approved scope, none of the following were implemented, even though Phase 10A reported them — they remain open findings for a future phase, not silently dropped:
+
+- General accessibility cleanup beyond the fields directly rewritten for §25.4 (booking-wizard remarks textarea label, dashboard "Needs Attention" tile clickability, etc.).
+- Dashboard dead-tile UX redesign (the two non-clickable "Needs Attention" tiles).
+- Broader mass-assignment refactoring — `User::role` remains in that model's `#[Fillable]` list (not currently exploitable; see Phase 10A's finding and §18). `ProfileController`/`ProfileUpdateRequest` were touched by Phase 10B but neither reads/writes `role`, so this narrowly-scoped work did not require touching that finding.
+- Removal of the dead `scheduled` `BookingStatus` case.
+- Email verification enforcement/cleanup (§5, §18).
+- Per-technician authorization boundary (§6, §13, §19).
+- Bicycle archive/delete (§11, §20).
+- Maintenance reminders, inventory, repair photos, external (email/SMS) notification delivery, and any other product-expansion idea Phase 10A noted arising naturally during its audit.
+- Unrelated technical debt: the stale `@tailwindcss/vite` dependency, splitting `Staff\BookingController`, formalizing the scattered status-transition guards into a single declarative table.
+
+These remain accurate, open items in this document (§17–§19, §21) and should be treated as the starting point for whatever phase comes after Phase 10B, not re-discovered from scratch.

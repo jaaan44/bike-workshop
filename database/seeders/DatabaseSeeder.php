@@ -2,7 +2,6 @@
 
 namespace Database\Seeders;
 
-use App\Models\User;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 
@@ -12,26 +11,24 @@ class DatabaseSeeder extends Seeder
 
     /**
      * Seed the application's database.
+     *
+     * BicycleTypeSeeder/BicyclePartSeeder are lookup data the app needs in
+     * every environment, so they always run. DemoAccountSeeder creates
+     * accounts with a publicly-documented, guessable password ("password")
+     * and is only ever called when DemoAccountSeeder::shouldRun() says the
+     * current environment is safe for it (local/testing) — never
+     * unconditionally, so a plain `php artisan db:seed` against a
+     * production-configured environment can't silently create predictable
+     * privileged credentials (Phase 10A finding). See README.md's "Demo
+     * accounts" section for the operator-facing explanation.
      */
     public function run(): void
     {
         $this->call(BicycleTypeSeeder::class);
         $this->call(BicyclePartSeeder::class);
 
-        // Demo accounts for manual testing (password for all: "password").
-        // Checking existence first (rather than firstOrCreate with a factory's
-        // raw() attributes) avoids the factory's own random default email
-        // silently overwriting the one we're searching/creating by.
-        if (! User::where('email', 'customer@example.com')->exists()) {
-            User::factory()->create(['name' => 'Casey Customer', 'email' => 'customer@example.com']);
-        }
-
-        if (! User::where('email', 'staff@example.com')->exists()) {
-            User::factory()->staff()->create(['name' => 'Sam Staff', 'email' => 'staff@example.com']);
-        }
-
-        if (! User::where('email', 'technician@example.com')->exists()) {
-            User::factory()->technician()->create(['name' => 'Tony Technician', 'email' => 'technician@example.com']);
+        if (DemoAccountSeeder::shouldRun(app()->environment())) {
+            $this->call(DemoAccountSeeder::class);
         }
     }
 }
