@@ -10,6 +10,53 @@
 
 set -euo pipefail
 
+# Laravel compiles .env-derived config (and route/event/package-discovery
+# data) into bootstrap/cache/*.php the moment anything runs `config:cache`
+# (etc. — see docs/DEPLOYMENT.md §12/§28's optional post-deploy step).
+# Because bootstrap/cache/ lives inside the whole-repo bind mount
+# (`.:/var/www/html` in compose.yaml), those files persist on the host
+# across every container recreation, exactly like .env itself does. Unlike
+# .env, though, editing .env does NOT invalidate an already-cached
+# bootstrap/cache/config.php — Laravel trusts the cache file over
+# config/*.php + .env whenever it's present. During a real staging
+# credential rotation, this meant `php artisan migrate --force` below read
+# the OLD DB_PASSWORD baked into a config.php cached before the rotation,
+# not the new value in .env, and migration failed with SQLSTATE[HY000]
+# [1045] Access denied — see docs/DEPLOYMENT.md §0.5 for the full incident.
+#
+# None of the five files below are source-controlled (they're all covered
+# by the wildcard ignore in bootstrap/cache/.gitignore) or produced by the
+# image at build time — they only ever exist because something (an
+# operator, or `composer install`'s package:discover hook) generated them
+# against a filesystem/.env state that may since have changed. Removing
+# them unconditionally, every boot, before anything below reads
+# config/routes/DB credentials, guarantees this container always boots
+# against the CURRENT bind-mounted .env and vendor/ contents. `rm -f` is a
+# no-op on a file that doesn't exist, so this is safe on every single
+# start, not just after a credential rotation.
+#
+# This entrypoint always runs as root (no `USER` directive in the
+# Dockerfile), so it can remove these files regardless of what host-side
+# ownership a previous www-data-owned run left them with — an operator
+# should never need `sudo rm` on the host to recover from this again.
+clear_stale_bootstrap_cache() {
+    local app_root="${1:-.}"
+    rm -f \
+        "${app_root}/bootstrap/cache/config.php" \
+        "${app_root}/bootstrap/cache/routes-v7.php" \
+        "${app_root}/bootstrap/cache/events.php" \
+        "${app_root}/bootstrap/cache/services.php" \
+        "${app_root}/bootstrap/cache/packages.php"
+}
+
+# Lets docker/entrypoint.test.sh source this file and exercise
+# clear_stale_bootstrap_cache() directly, without running the
+# container-boot sequence below (which needs a real filesystem/DB and
+# isn't unit-testable).
+if [[ "${ENTRYPOINT_SOURCE_ONLY:-}" == "1" ]]; then
+    return 0 2>/dev/null || exit 0
+fi
+
 cd /var/www/html
 
 # .env is bind-mounted from the host in every environment this image runs
@@ -62,6 +109,11 @@ sync_release_artifact() {
 sync_release_artifact vendor vendor
 sync_release_artifact build public/build
 
+# Must run before any `php artisan` command below (including the
+# composer/APP_KEY/migrate steps that follow) — see the comment on
+# clear_stale_bootstrap_cache() above for why.
+clear_stale_bootstrap_cache .
+
 # Extreme fallback only, for an image built without the mechanism above
 # (e.g. one predating this change) or a volume refresh that somehow still
 # left things incomplete — never the normal path.
@@ -106,6 +158,8 @@ if [ "${DB_SEED_ON_BOOT:-false}" = "true" ]; then
     php artisan db:seed --force
 fi
 
-php artisan config:clear >/dev/null 2>&1 || true
+# No config:clear here: clear_stale_bootstrap_cache already guaranteed no
+# stale bootstrap/cache/config.php exists for this boot, and nothing above
+# recreates one, so there is nothing left to clear.
 
 exec "$@"
