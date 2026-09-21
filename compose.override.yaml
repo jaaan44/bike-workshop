@@ -1,0 +1,23 @@
+# Local-development convenience overrides — Docker Compose auto-merges
+# compose.override.yaml alongside compose.yaml for a plain `docker compose
+# up`/`build`/etc., with no extra flag needed. This file exists to restore
+# one thing for local dev that compose.yaml's own (staging/production-safe)
+# defaults deliberately no longer provide: reaching MySQL directly from the
+# host, e.g. for a GUI client at 127.0.0.1:${DB_FORWARD_PORT:-3348}.
+#
+# This file is git-tracked and always present, including on a VPS checkout
+# — that is fine as long as the VPS's own .env pins which compose files
+# actually load:
+#
+#   COMPOSE_FILE=compose.yaml
+#
+# With that set, every plain `docker compose ...` command on that host
+# loads only compose.yaml and ignores this file, so staging/production
+# never needs an uncommitted edit to compose.yaml itself (as the real
+# staging deployment previously did) to keep MySQL off the host network.
+# Without COMPOSE_FILE set (the local-dev default), this file applies
+# automatically.
+services:
+  mysql:
+    ports:
+      - "${DB_FORWARD_PORT:-3348}:3306"

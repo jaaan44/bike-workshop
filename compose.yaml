@@ -12,15 +12,26 @@
 #   docker compose down             # stop everything
 #   docker compose logs -f          # tail logs
 #
-# Host ports are configurable via .env (see .env.example) so this can run
-# alongside other projects on the same VPS without collisions:
-#   APP_PORT=8013          browser -> http://127.0.0.1:8013 -> app container :80
+# Host ports are configurable via .env (see .env.example):
+#   APP_PORT=8013          browser/reverse proxy -> 127.0.0.1:8013 -> app container :80
 #   DB_FORWARD_PORT=3348   host MySQL client -> 127.0.0.1:3348 -> mysql container :3306
 #   VITE_FORWARD_PORT=5175 (only relevant if the optional `vite` service is started)
 #
 # Inside the Docker network, Laravel always talks to MySQL as `mysql:3306`
 # — the host-side port mapping above is irrelevant from inside the app
 # container and must not be used for DB_HOST/DB_PORT.
+#
+# Network exposure (Phase 11C): the `app` port is bound to 127.0.0.1 only —
+# it is meant to be reached through a host reverse proxy (e.g. host Nginx
+# terminating HTTPS), never directly from the public internet. `mysql`
+# publishes no host port at all by default: nothing outside the Docker
+# network can reach it, which matters on a shared VPS where other,
+# unrelated apps' processes also run on the same host and could otherwise
+# reach a loopback-bound port. Local development gets its MySQL host port
+# back via `compose.override.yaml` (auto-merged by a plain `docker compose
+# up`, see that file) — a staging/production host should set
+# `COMPOSE_FILE=compose.yaml` in its own `.env` so that override never
+# applies there, without needing any uncommitted edit to this file.
 #
 # Shared-VPS safety: every container name, volume name, and the network
 # name below are prefixed `bicycle_workshop_` specifically so this project
@@ -38,7 +49,7 @@ services:
     container_name: bicycle_workshop_app
     restart: unless-stopped
     ports:
-      - "${APP_PORT:-8013}:80"
+      - "127.0.0.1:${APP_PORT:-8013}:80"
     environment:
       DB_HOST: mysql
       DB_PORT: 3306
@@ -63,8 +74,11 @@ services:
     image: mysql:8.4
     container_name: bicycle_workshop_mysql
     restart: unless-stopped
-    ports:
-      - "${DB_FORWARD_PORT:-3348}:3306"
+    # No host port published by default (Phase 11C) — reachable only from
+    # inside the `bicycle_workshop` Docker network (i.e. from the `app`
+    # container as `mysql:3306`). Local development gets a host-published
+    # port for GUI clients via compose.override.yaml instead of here — see
+    # the comment above this service block.
     environment:
       MYSQL_DATABASE: ${DB_DATABASE:-bike_workshop}
       MYSQL_USER: ${DB_USERNAME:-sail}

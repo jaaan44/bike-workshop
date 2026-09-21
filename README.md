@@ -17,8 +17,8 @@ docker compose up -d
 That's it — the app container's entrypoint automatically installs Composer/npm dependencies if needed, generates `APP_KEY` if missing, waits for MySQL, and runs `php artisan migrate --force` on every start (safe/forward-only, never destructive). **You do not need to run `php artisan serve` or `npm run dev`** — Apache starts automatically inside the container and serves the app the whole time it's running.
 
 - App: **http://127.0.0.1:8013**
-- MySQL (from the host, e.g. a GUI client): **127.0.0.1:3348** — inside Docker the app always reaches it as `mysql:3306`, regardless of this host-side port
-- Rebuild after changing `composer.json`/`composer.lock` or frontend source (`resources/`): `docker compose build`
+- MySQL (from the host, e.g. a GUI client): **127.0.0.1:3348** via `compose.override.yaml`, which Compose auto-merges for a plain `docker compose up` — inside Docker the app always reaches it as `mysql:3306`, regardless of this host-side port. `compose.yaml`'s own defaults (used as-is on staging/production) bind the app port to `127.0.0.1` and publish no MySQL host port at all — see `compose.yaml`/`compose.override.yaml` and `docs/DEPLOYMENT.md` for the staging/production network posture.
+- Rebuild after changing `composer.json`/`composer.lock` or frontend source (`resources/`): `docker compose build`, then `docker compose up -d` to recreate the container — the entrypoint automatically detects and refreshes stale `vendor`/`public/build` volume content against the new image on every start, so a rebuilt image's dependencies/assets are always what actually runs
 - Stop: `docker compose down` (never `docker compose down -v` unless you explicitly want to delete this project's MySQL data volume)
 - Logs: `docker compose logs -f`
 - Run any Artisan command: `docker compose exec app php artisan ...`
@@ -81,4 +81,4 @@ The full customer + staff repair workflow is implemented end-to-end — registra
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — application structure, models, request flow, repair-workflow state machine (with diagrams)
 - **[docs/DATABASE.md](docs/DATABASE.md)** — schema and ER diagram
 - **[docs/HANDOFF.md](docs/HANDOFF.md)** — short "start here" briefing for picking up development, suitable to hand to another developer or AI session
-- **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** — the authoritative V1 deployment/rollback/validation runbook (Phase 11A), covering runtime requirements, the environment checklist, backup strategy, and the ordered deployment/rollback sequence for the staging VPS
+- **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** — the authoritative deployment/rollback/validation runbook, covering runtime requirements, the environment checklist, backup strategy, and the ordered deployment/rollback sequence for the staging VPS. Staging is live at `https://bikeworkshop.storm-ark.com`; the runbook reflects that real deployment's confirmed architecture and the Phase 11C hardening that followed it, not just pre-deployment assumptions
