@@ -10,7 +10,12 @@
         \App\Enums\BookingStatus::ReadyForDelivery,
         \App\Enums\BookingStatus::Completed,
     ];
-    $isShareable = in_array($booking->status, $shareableStatuses, true);
+    // A booking closed after the customer declined the proposed repairs is
+    // also shareable, so the declined proposal stays visible for reference
+    // (not the ordinary Cancelled case, which never has inspection/repair
+    // item data to show since cancel() only fires from Pending/Accepted).
+    $isDeclinedAndClosed = $booking->wasCancelledAfterCustomerDecline();
+    $isShareable = in_array($booking->status, $shareableStatuses, true) || $isDeclinedAndClosed;
 
     $history = $booking->statusHistories->sortBy('id')->values();
 
@@ -31,6 +36,8 @@
     $repairCompletedEntry = $history->last(fn ($entry) => $entry->new_status === \App\Enums\BookingStatus::RepairCompleted);
     $fulfillmentEntry = $history->last(fn ($entry) => in_array($entry->new_status, [\App\Enums\BookingStatus::ReadyForPickup, \App\Enums\BookingStatus::ReadyForDelivery], true));
     $completedEntry = $history->last(fn ($entry) => $entry->new_status === \App\Enums\BookingStatus::Completed);
+    $closedWithoutRepairEntry = $history->last(fn ($entry) => $entry->old_status === \App\Enums\BookingStatus::Inspection
+        && $entry->new_status === \App\Enums\BookingStatus::Cancelled);
 
     $latestUpdate = optional($history->last())->created_at ?? $booking->created_at;
 @endphp
@@ -167,6 +174,10 @@
                 <p class="text-xs text-gray-500 pt-2 border-t border-gray-100">
                     You approved these repairs on {{ $approvalEntry->created_at->format('M j, Y g:ia') }}.
                 </p>
+            @elseif ($isDeclinedAndClosed)
+                <p class="text-xs text-gray-500 pt-2 border-t border-gray-100">
+                    You declined these repairs. Your bicycle was returned without repair.
+                </p>
             @endif
         </div>
     @endif
@@ -197,6 +208,18 @@
     @elseif ($repairCompletedEntry && $booking->status === \App\Enums\BookingStatus::RepairCompleted)
         <div class="mb-4 rounded-lg bg-purple-50 border border-purple-200 px-4 py-3 text-sm text-purple-700">
             Repair work is finished and about to go through quality check.
+        </div>
+    @elseif ($booking->status === \App\Enums\BookingStatus::Cancelled)
+        <div class="mb-4 rounded-lg bg-gray-50 border border-gray-200 px-4 py-3 text-sm text-gray-700">
+            @if ($isDeclinedAndClosed)
+                You declined the proposed repairs
+                @if ($closedWithoutRepairEntry)
+                    on {{ $closedWithoutRepairEntry->created_at->format('M j, Y') }}
+                @endif
+                . Your bicycle was returned without repair.
+            @else
+                This booking was cancelled.
+            @endif
         </div>
     @endif
 

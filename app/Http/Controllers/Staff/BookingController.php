@@ -101,8 +101,38 @@ class BookingController extends Controller
         return back()->with('status', 'booking-cancelled');
     }
 
+    /**
+     * Close out a booking whose customer declined the proposed repairs,
+     * returning the bicycle without any work done. Reuses Cancelled rather
+     * than introducing a new status: a declined repair "not proceeding to
+     * have work done" is exactly what Cancelled already means everywhere
+     * else in the app (excluded from active bookings, excluded from
+     * completed service history, not counted on the dashboard, no
+     * notification fires) — see docs/PROJECT_STATUS.md for the full
+     * reasoning. Only reachable from the specific post-decline Inspection
+     * state (Booking::wasJustDeclinedByCustomer()), so it can't be used to
+     * silently cancel an ordinary in-progress inspection, and it's the only
+     * path that ever transitions Inspection -> Cancelled, which is what
+     * lets the views distinguish "declined and closed" from an ordinary
+     * early-stage cancellation (Booking::wasCancelledAfterCustomerDecline()).
+     */
+    public function closeDeclinedRepair(Booking $booking): RedirectResponse
+    {
+        if (! $booking->wasJustDeclinedByCustomer()) {
+            return back()->with('error', 'This booking is not in a declined state that can be closed.');
+        }
+
+        $booking->transitionTo(BookingStatus::Cancelled);
+
+        return back()->with('status', 'declined-repair-closed');
+    }
+
     public function assignTechnician(Request $request, Booking $booking): RedirectResponse
     {
+        if ($rejected = $this->rejectIfTerminal($booking)) {
+            return $rejected;
+        }
+
         $data = $request->validate([
             'assigned_technician_id' => ['nullable', Rule::exists('users', 'id')->where('role', UserRole::Technician->value)],
         ]);
@@ -119,6 +149,10 @@ class BookingController extends Controller
 
     public function updateInspection(Request $request, Booking $booking): RedirectResponse
     {
+        if ($rejected = $this->rejectIfTerminal($booking)) {
+            return $rejected;
+        }
+
         $data = $request->validate([
             'findings' => ['nullable', 'string', 'max:2000'],
             'recommended_repairs' => ['nullable', 'string', 'max:2000'],
@@ -138,6 +172,10 @@ class BookingController extends Controller
 
     public function storeRepairItem(Request $request, Booking $booking): RedirectResponse
     {
+        if ($rejected = $this->rejectIfTerminal($booking)) {
+            return $rejected;
+        }
+
         $data = $request->validate([
             'description' => ['required', 'string', 'max:255'],
         ]);
@@ -154,6 +192,10 @@ class BookingController extends Controller
     {
         abort_unless($repairItem->booking_id === $booking->id, 404);
 
+        if ($rejected = $this->rejectIfTerminal($booking)) {
+            return $rejected;
+        }
+
         // completed_at is deliberately excluded from RepairItem's Fillable,
         // set directly here instead of through update().
         $repairItem->completed_at = now();
@@ -164,6 +206,10 @@ class BookingController extends Controller
 
     public function storeTechnicianNote(Request $request, Booking $booking): RedirectResponse
     {
+        if ($rejected = $this->rejectIfTerminal($booking)) {
+            return $rejected;
+        }
+
         $data = $request->validate([
             'note' => ['required', 'string', 'max:2000'],
         ]);
@@ -174,6 +220,24 @@ class BookingController extends Controller
         ]);
 
         return back()->with('status', 'note-added');
+    }
+
+    /**
+     * Guard shared by every action that writes operational data (inspection,
+     * repair items, notes, technician assignment) against a closed job.
+     * Completed/Cancelled are terminal: nothing about the repair itself
+     * should still be editable once a booking reaches one of them, so this
+     * is checked server-side rather than relying only on the view hiding
+     * the forms (Phase 10A finding — those forms were previously reachable
+     * via a direct request regardless of status).
+     */
+    private function rejectIfTerminal(Booking $booking): ?RedirectResponse
+    {
+        if (! $booking->status->isTerminal()) {
+            return null;
+        }
+
+        return back()->with('error', 'This repair is closed and can no longer be edited.');
     }
 
     public function requestApproval(Booking $booking): RedirectResponse

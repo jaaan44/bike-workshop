@@ -415,4 +415,98 @@ class StaffBookingManagementTest extends TestCase
 
         $this->assertSame(BookingStatus::RepairInProgress, $booking->refresh()->status);
     }
+
+    /**
+     * Phase 10A finding: none of these five actions checked the booking's
+     * status at all, so a completed job's inspection/repair items/notes/
+     * technician assignment could still be silently altered via a direct
+     * request even though the UI hid the forms. Phase 10B adds a
+     * server-side guard — this proves it, not just that the UI hides
+     * something.
+     */
+    public function test_completed_booking_rejects_all_operational_edits(): void
+    {
+        $staff = User::factory()->staff()->create();
+        $technician = User::factory()->technician()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::Completed);
+        $booking->inspection()->create(['findings' => 'Original findings']);
+        $item = $booking->repairItems()->create(['description' => 'Replace brake pads']);
+
+        $this->actingAs($staff)
+            ->put(route('staff.bookings.inspection.update', $booking), ['findings' => 'Tampered findings'])
+            ->assertRedirect();
+        $this->assertSame('Original findings', $booking->inspection->fresh()->findings);
+
+        $this->actingAs($staff)
+            ->post(route('staff.bookings.repair-items.store', $booking), ['description' => 'Sneaky extra item'])
+            ->assertRedirect();
+        $this->assertSame(1, $booking->repairItems()->count());
+
+        $this->actingAs($staff)
+            ->post(route('staff.bookings.repair-items.complete', [$booking, $item]))
+            ->assertRedirect();
+        $this->assertFalse($item->refresh()->isCompleted());
+
+        $this->actingAs($staff)
+            ->post(route('staff.bookings.notes.store', $booking), ['note' => 'Added after the fact'])
+            ->assertRedirect();
+        $this->assertSame(0, $booking->technicianNotes()->count());
+
+        $this->actingAs($staff)
+            ->put(route('staff.bookings.technician.update', $booking), ['assigned_technician_id' => $technician->id])
+            ->assertRedirect();
+        $this->assertNull($booking->refresh()->assigned_technician_id);
+    }
+
+    public function test_cancelled_booking_rejects_all_operational_edits(): void
+    {
+        $staff = User::factory()->staff()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::Cancelled);
+
+        $this->actingAs($staff)
+            ->post(route('staff.bookings.repair-items.store', $booking), ['description' => 'x'])
+            ->assertRedirect();
+        $this->assertSame(0, $booking->repairItems()->count());
+
+        $this->actingAs($staff)
+            ->post(route('staff.bookings.notes.store', $booking), ['note' => 'x'])
+            ->assertRedirect();
+        $this->assertSame(0, $booking->technicianNotes()->count());
+
+        $this->actingAs($staff)
+            ->put(route('staff.bookings.inspection.update', $booking), ['findings' => 'x'])
+            ->assertRedirect();
+        $this->assertNull($booking->fresh()->inspection);
+    }
+
+    public function test_active_booking_remains_editable(): void
+    {
+        // The guard is scoped to terminal statuses only — an in-flight
+        // booking must remain fully editable, same as before Phase 10B.
+        $staff = User::factory()->staff()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::RepairInProgress);
+
+        $this->actingAs($staff)
+            ->post(route('staff.bookings.repair-items.store', $booking), ['description' => 'Replace brake pads'])
+            ->assertRedirect();
+
+        $this->assertSame(1, $booking->repairItems()->count());
+    }
+
+    public function test_completed_booking_is_still_visible_read_only_to_staff(): void
+    {
+        // Server-side guards must not come at the cost of legitimate
+        // read-only access to a closed job's own record.
+        $staff = User::factory()->staff()->create();
+        $booking = $this->bookingFor(User::factory()->create(), BookingStatus::Completed);
+        $booking->inspection()->create(['findings' => 'Worn brake pads.']);
+        $booking->repairItems()->create(['description' => 'Replace brake pads']);
+
+        $this->actingAs($staff)
+            ->get(route('staff.bookings.show', $booking))
+            ->assertOk()
+            ->assertSee('Worn brake pads.')
+            ->assertSee('Replace brake pads')
+            ->assertDontSee('Mark Done');
+    }
 }

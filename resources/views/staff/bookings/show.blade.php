@@ -35,6 +35,8 @@
         <div class="mb-4 rounded-lg bg-gray-50 border border-gray-200 px-4 py-3 text-sm text-gray-700">Quality check failed &mdash; sent back for rework.</div>
     @elseif (session('status') === 'booking-completed')
         <div class="mb-4 rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700">Booking marked as completed.</div>
+    @elseif (session('status') === 'declined-repair-closed')
+        <div class="mb-4 rounded-lg bg-gray-50 border border-gray-200 px-4 py-3 text-sm text-gray-700">Closed &mdash; the bicycle is returned without repair.</div>
     @endif
 
     @if (session('error'))
@@ -141,6 +143,33 @@
                     Send for Customer Approval
                 </button>
             </form>
+
+            @if ($booking->wasJustDeclinedByCustomer())
+                <div class="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-700">
+                    The customer declined these proposed repairs. Revise the inspection/repair items above and send again, or close the job without repair.
+                </div>
+
+                <button type="button" x-on:click="$dispatch('open-modal', 'close-declined')"
+                    class="w-full rounded-lg bg-white px-5 py-3 text-sm font-semibold text-red-600 border border-gray-300 hover:bg-gray-50">
+                    Close &mdash; Customer Declined Repair
+                </button>
+
+                <x-modal name="close-declined" focusable>
+                    <form method="POST" action="{{ route('staff.bookings.close-declined', $booking) }}" class="p-6">
+                        @csrf
+                        <h2 class="text-lg font-medium text-gray-900">Close this repair without work done?</h2>
+                        <p class="mt-1 text-sm text-gray-600">
+                            The customer declined the proposed repairs. This marks the job closed and the bicycle as returned without repair. This can't be undone.
+                        </p>
+                        <div class="mt-6 flex justify-end gap-3">
+                            <x-secondary-button type="button" x-on:click="$dispatch('close')">
+                                Never Mind
+                            </x-secondary-button>
+                            <x-danger-button>Close Without Repair</x-danger-button>
+                        </div>
+                    </form>
+                </x-modal>
+            @endif
         @elseif ($booking->status === \App\Enums\BookingStatus::AwaitingCustomerApproval)
             <div class="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-700">
                 Waiting on the customer to approve the proposed repairs.
@@ -189,6 +218,14 @@
                     {{ $booking->status === \App\Enums\BookingStatus::ReadyForPickup ? 'Mark as Picked Up' : 'Mark as Delivered' }}
                 </button>
             </form>
+        @elseif ($booking->status === \App\Enums\BookingStatus::Cancelled)
+            <div class="rounded-lg bg-gray-50 border border-gray-200 px-4 py-3 text-sm text-gray-700">
+                @if ($booking->wasCancelledAfterCustomerDecline())
+                    The customer declined the proposed repairs. The bicycle was returned without repair.
+                @else
+                    This booking was cancelled.
+                @endif
+            </div>
         @endif
 
         @if (in_array($booking->status, [\App\Enums\BookingStatus::Pending, \App\Enums\BookingStatus::Accepted], true))
@@ -215,45 +252,69 @@
         @endif
     </div>
 
-    @if (! in_array($booking->status, [\App\Enums\BookingStatus::Pending, \App\Enums\BookingStatus::Accepted, \App\Enums\BookingStatus::Cancelled], true))
+    @if (! in_array($booking->status, [\App\Enums\BookingStatus::Pending, \App\Enums\BookingStatus::Accepted], true))
+        @php $readOnly = $booking->status->isTerminal(); @endphp
+
+        @if ($readOnly)
+            <p class="text-xs text-gray-400 mb-2">This job is closed &mdash; shown below for reference, read-only.</p>
+        @endif
+
         <!-- Technician Assignment -->
         <div class="bg-white rounded-xl border border-gray-200 p-4 mb-4">
             <p class="text-xs font-semibold text-gray-500 uppercase mb-2">Assigned Technician</p>
-            <form method="POST" action="{{ route('staff.bookings.technician.update', $booking) }}" class="flex gap-2">
-                @csrf
-                @method('PUT')
-                <select name="assigned_technician_id" class="flex-1 rounded-lg border-gray-300 text-sm">
-                    <option value="">Unassigned</option>
-                    @foreach ($technicians as $technician)
-                        <option value="{{ $technician->id }}" @selected($booking->assigned_technician_id === $technician->id)>
-                            {{ $technician->name }}
-                        </option>
-                    @endforeach
-                </select>
-                <button type="submit" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500">
-                    Save
-                </button>
-            </form>
+            @if ($readOnly)
+                <p class="text-sm text-gray-700">{{ $booking->assignedTechnician?->name ?? 'Unassigned' }}</p>
+            @else
+                <form method="POST" action="{{ route('staff.bookings.technician.update', $booking) }}" class="flex gap-2">
+                    @csrf
+                    @method('PUT')
+                    <select name="assigned_technician_id" class="flex-1 rounded-lg border-gray-300 text-sm">
+                        <option value="">Unassigned</option>
+                        @foreach ($technicians as $technician)
+                            <option value="{{ $technician->id }}" @selected($booking->assigned_technician_id === $technician->id)>
+                                {{ $technician->name }}
+                            </option>
+                        @endforeach
+                    </select>
+                    <button type="submit" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500">
+                        Save
+                    </button>
+                </form>
+            @endif
         </div>
 
         <!-- Inspection -->
         <div class="bg-white rounded-xl border border-gray-200 p-4 mb-4">
             <p class="text-xs font-semibold text-gray-500 uppercase mb-2">Inspection</p>
-            <form method="POST" action="{{ route('staff.bookings.inspection.update', $booking) }}" class="space-y-3">
-                @csrf
-                @method('PUT')
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Findings</label>
-                    <textarea name="findings" rows="3" class="w-full rounded-lg border-gray-300 text-sm" placeholder="What did you find during inspection?">{{ old('findings', $booking->inspection?->findings) }}</textarea>
-                </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Recommended Repairs</label>
-                    <textarea name="recommended_repairs" rows="3" class="w-full rounded-lg border-gray-300 text-sm" placeholder="What repairs do you recommend?">{{ old('recommended_repairs', $booking->inspection?->recommended_repairs) }}</textarea>
-                </div>
-                <button type="submit" class="w-full rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
-                    Save Inspection
-                </button>
-            </form>
+            @if ($readOnly)
+                @if ($booking->inspection?->findings)
+                    <p class="text-xs font-medium text-gray-500 mb-1">Findings</p>
+                    <p class="text-sm text-gray-900 whitespace-pre-line mb-3">{{ $booking->inspection->findings }}</p>
+                @endif
+                @if ($booking->inspection?->recommended_repairs)
+                    <p class="text-xs font-medium text-gray-500 mb-1">Recommended Repairs</p>
+                    <p class="text-sm text-gray-900 whitespace-pre-line">{{ $booking->inspection->recommended_repairs }}</p>
+                @endif
+                @if (! $booking->inspection?->findings && ! $booking->inspection?->recommended_repairs)
+                    <p class="text-sm text-gray-500">No inspection notes were recorded.</p>
+                @endif
+            @else
+                <form method="POST" action="{{ route('staff.bookings.inspection.update', $booking) }}" class="space-y-3">
+                    @csrf
+                    @method('PUT')
+                    <div>
+                        <label for="findings" class="block text-sm font-medium text-gray-700 mb-1">Findings</label>
+                        <textarea id="findings" name="findings" rows="3" class="w-full rounded-lg border-gray-300 text-sm" placeholder="What did you find during inspection?">{{ old('findings', $booking->inspection?->findings) }}</textarea>
+                    </div>
+                    <div>
+                        <label for="recommended_repairs" class="block text-sm font-medium text-gray-700 mb-1">Recommended Repairs</label>
+                        <textarea id="recommended_repairs" name="recommended_repairs" rows="3" class="w-full rounded-lg border-gray-300 text-sm" placeholder="What repairs do you recommend?">{{ old('recommended_repairs', $booking->inspection?->recommended_repairs) }}</textarea>
+                    </div>
+                    <button type="submit" class="w-full rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
+                        Save Inspection
+                    </button>
+                </form>
+            @endif
             @if ($booking->inspection?->inspectedBy)
                 <p class="mt-2 text-xs text-gray-400">Last updated by {{ $booking->inspection->inspectedBy->name }}</p>
             @endif
@@ -272,7 +333,9 @@
                             <span class="{{ $item->isCompleted() ? 'text-gray-400 line-through' : 'text-gray-900' }}">
                                 {{ $item->description }}
                             </span>
-                            @if (! $item->isCompleted())
+                            @if ($item->isCompleted())
+                                <span class="text-xs text-green-600 font-medium whitespace-nowrap">Done</span>
+                            @elseif (! $readOnly)
                                 <form method="POST" action="{{ route('staff.bookings.repair-items.complete', [$booking, $item]) }}">
                                     @csrf
                                     <button type="submit" class="text-xs font-semibold text-indigo-600 hover:text-indigo-500 whitespace-nowrap">
@@ -280,20 +343,23 @@
                                     </button>
                                 </form>
                             @else
-                                <span class="text-xs text-green-600 font-medium whitespace-nowrap">Done</span>
+                                <span class="text-xs text-gray-400 font-medium whitespace-nowrap">Not done</span>
                             @endif
                         </li>
                     @endforeach
                 </ul>
             @endif
 
-            <form method="POST" action="{{ route('staff.bookings.repair-items.store', $booking) }}" class="flex gap-2">
-                @csrf
-                <input type="text" name="description" placeholder="Add a repair item" class="flex-1 rounded-lg border-gray-300 text-sm" required maxlength="255">
-                <button type="submit" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500">
-                    Add
-                </button>
-            </form>
+            @unless ($readOnly)
+                <form method="POST" action="{{ route('staff.bookings.repair-items.store', $booking) }}" class="flex gap-2">
+                    @csrf
+                    <label for="repair-item-description" class="sr-only">Repair item description</label>
+                    <input id="repair-item-description" type="text" name="description" placeholder="Add a repair item" class="flex-1 rounded-lg border-gray-300 text-sm" required maxlength="255">
+                    <button type="submit" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500">
+                        Add
+                    </button>
+                </form>
+            @endunless
         </div>
 
         <!-- Technician Notes -->
@@ -313,13 +379,16 @@
                 </ul>
             @endif
 
-            <form method="POST" action="{{ route('staff.bookings.notes.store', $booking) }}" class="space-y-2">
-                @csrf
-                <textarea name="note" rows="2" class="w-full rounded-lg border-gray-300 text-sm" placeholder="Add a note" required maxlength="2000"></textarea>
-                <button type="submit" class="w-full rounded-lg bg-white px-5 py-2 text-sm font-semibold text-gray-700 border border-gray-300 hover:bg-gray-50">
-                    Add Note
-                </button>
-            </form>
+            @unless ($readOnly)
+                <form method="POST" action="{{ route('staff.bookings.notes.store', $booking) }}" class="space-y-2">
+                    @csrf
+                    <label for="note" class="sr-only">Note</label>
+                    <textarea id="note" name="note" rows="2" class="w-full rounded-lg border-gray-300 text-sm" placeholder="Add a note" required maxlength="2000"></textarea>
+                    <button type="submit" class="w-full rounded-lg bg-white px-5 py-2 text-sm font-semibold text-gray-700 border border-gray-300 hover:bg-gray-50">
+                        Add Note
+                    </button>
+                </form>
+            @endunless
         </div>
     @endif
 

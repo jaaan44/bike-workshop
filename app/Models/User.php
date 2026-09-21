@@ -71,4 +71,18 @@ class User extends Authenticatable
     {
         return $this->hasMany(Booking::class);
     }
+
+    /**
+     * Technician notes this user has authored. technician_notes.user_id has
+     * no nullOnDelete/cascadeOnDelete (unlike every other author-type FK in
+     * the schema), so this is used to block self-service account deletion
+     * with a clear message instead of letting the delete fail on a raw DB
+     * constraint violation — see ProfileController::destroy().
+     *
+     * @return HasMany<TechnicianNote, $this>
+     */
+    public function technicianNotes(): HasMany
+    {
+        return $this->hasMany(TechnicianNote::class);
+    }
 }
