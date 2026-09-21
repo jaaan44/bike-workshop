@@ -529,23 +529,25 @@ docker compose exec mysql sh -c \
 
 - **Use the application's own DB user (`MYSQL_USER`/`MYSQL_PASSWORD`, already granted full privileges on its own database by the `mysql:8.4` image's env vars), not `root`.** A plain `mysqldump` against this user initially **failed** during the real deployment because the app's DB user lacks the `PROCESS` privilege that `mysqldump` uses by default to collect tablespace metadata — the fix is `--no-tablespaces` (which skips that metadata; it is schema/data-agnostic and does not omit any table's rows), **not** granting `PROCESS` to the application's DB user just to satisfy an unqualified `mysqldump` invocation. Granting `PROCESS` would give that user visibility into other sessions/queries running on the same MySQL server — unnecessary privilege for a backup command that doesn't need it.
 - **Verify every backup**, exactly as the real deployment did: check the command's exit code, the resulting file's size is non-trivial (a near-zero-byte file usually means an auth or privilege failure that didn't otherwise surface), the file's SHA-256 (`sha256sum backup-*.sql.gz`, recorded alongside the backup so a later restore can confirm integrity), and that the uncompressed dump ends with `mysqldump`'s own `-- Dump completed on <timestamp>` footer line (its absence means the dump was truncated or interrupted, and must not be trusted).
-- **Frequency:** daily is a reasonable minimum for a small workshop's operational data; more frequent (e.g. every few hours) if the shop's booking volume justifies it — this is a judgment call for whoever owns the VPS, not something this repository dictates. **Always** take one immediately before any deployment that will migrate the schema (§28).
-- **Retention:** a simple rolling window (e.g. 7 daily + a handful of weekly snapshots) is sufficient for this scale — avoid an elaborate retention policy that itself becomes an operational burden.
-- **Off-server requirement:** backups stored only on the same VPS are not real backups (a VPS-level failure or compromise takes both the live data and its backup with it) — copy dumps to a separate location (e.g. DigitalOcean Spaces, another host, or even a periodically-synced local machine) on whatever cadence the budget allows.
-- **Restore-test requirement:** periodically (e.g. monthly) actually restore a dump into a scratch database and spot-check it — an untested backup is not a verified backup. This is a process recommendation, not something to automate in this phase.
+- **Frequency:** daily is a reasonable minimum for a small workshop's operational data; more frequent (e.g. every few hours) if the shop's booking volume justifies it — this is a judgment call for whoever owns the VPS, not something this repository dictates. **Always** take one immediately before any deployment that will migrate the schema (§28), in addition to (not instead of) the recurring automated backups below.
+- **Retention:** ~~a simple rolling window (e.g. 7 daily + a handful of weekly snapshots) is sufficient for this scale~~ — **implemented as of 2026-09-21**: 7-day local retention plus 30-day Backblaze B2 retention. See §34.6.
+- **Off-server requirement:** ~~backups stored only on the same VPS are not real backups... copy dumps to a separate location~~ — **implemented as of 2026-09-21**: every automated backup is uploaded to a private Backblaze B2 bucket. See §34.6.
+- **Restore-test requirement:** ~~periodically (e.g. monthly) actually restore a dump into a scratch database and spot-check it~~ — an initial restore test was performed and passed on 2026-09-21 (§34.8/§34.10); establishing a recurring cadence for future restore tests remains an operational judgment call for whoever owns the VPS, following the safe procedure in §34.8.
 
 **Never include a real password, connection string, or backup file's actual content in this repository or in any commit message.** The command above reads credentials from the container's own environment (`$MYSQL_USER`/`$MYSQL_PASSWORD`), never a literal value.
 
-**This phase does not configure any backup tooling, cron job, or off-server sync automation** — this section documents the verified-working command and procedure; scheduling it (e.g. a host `cron` entry) remains an operational task for whoever owns the VPS.
+**Historical note — superseded by §34:** this section originally documented the manual `mysqldump` command above as a verified-working procedure with no recurring automation ("this phase does not configure any backup tooling, cron job, or off-server sync automation... scheduling it remains an operational task for whoever owns the VPS"). As of 2026-09-21, that automation has been built, scheduled, and restore-tested — see §34 for the authoritative, current description of the recurring backup system. The manual command above remains accurate and still applies as-is to the one-off pre-deployment backup step in §28 step 4, which intentionally uses its own `backup-<timestamp>.sql.gz` filename (not the `auto-*` pattern §34.5's automated cleanup targets), so a deployment backup is never eligible for automatic deletion.
 
 ---
 
 ## 22. Filesystem backup requirements
 
-Per §6's storage audit, this application has **no user-uploaded or generated files** to back up. The only filesystem data outside the database that is genuinely non-reproducible is:
+Per §6's storage audit, this application has **no user-uploaded or generated files** to back up — that finding is unchanged. The only filesystem data outside the database that is genuinely non-reproducible is:
 
 - **The VPS's `.env` file** — contains `APP_KEY` (§11) and live database credentials, is git-ignored, and exists only on the server. Losing it without a backup means losing the ability to decrypt existing sessions and reconnect to the database without manual reconfiguration. **Back it up before every deployment or configuration change**, alongside the database backup (§21) and as its own explicit step in §28's sequence — a quick `cp .env .env.backup-$(date +%F-%H%M)` kept outside the web-served path (§16 already guarantees `.env` itself isn't web-reachable, but a stray backup copy under `public/` would be) is enough for a same-host safety net; keep a secure, access-controlled copy off the VPS too (e.g. in a password manager or secrets vault, never in git, never in this document) for the same off-server reasoning as §21's database backups.
 - **The `bicycle_workshop_mysql_data` named Docker volume** is the database's on-disk storage — this is what `mysqldump` (§21) already captures at the logical level; a raw volume-level backup is a possible supplementary method but `mysqldump` is the primary, portable recommendation.
+
+**As of 2026-09-21, `storage/app` is also backed up automatically** (§34) even though it currently holds no application-written data — a deliberate, low-cost forward-looking safeguard for `storage/app`'s Laravel-standard role as the app's persistent-files location, not a sign that upload functionality now exists. It is packaged as `auto-bike-workshop-storage-<timestamp>.tar.gz` alongside each automated database backup, with the same local/off-server retention (§34.6) and was itself restore-tested (§34.9/§34.10).
 
 **Explicitly not needed:** `vendor/`, `node_modules/`, `public/build/` (all reproducible from git + `docker compose build`), and any other git-tracked source — none of it is runtime-generated data.
 
@@ -751,7 +753,7 @@ This list was written before the real staging deployment happened. Every item be
 5. VPS firewall rules for the app/MySQL ports — **still recommended to confirm** (`ufw` exposing only SSH/HTTP/HTTPS, per the task's stated desired posture) — this repository cannot verify host firewall state, only what Docker itself publishes (now narrowed, §27).
 6. Host-level OS user/permissions on the VPS checkout directory — **[still open]**, not reported either way; no friction was reported during the real deployment, which is a weak positive signal but not a confirmation.
 7. Current `storage/logs/laravel.log` size and host-level log rotation — **[still open]**, not part of this deployment's scope.
-8. MySQL backup method/retention on the VPS beyond the one-time pre-deployment backup described in §21/§28 — **[still open]**; §21 documents the recommended recurring approach, but whether it's actually scheduled on the VPS is an ops task outside this phase.
+8. ~~MySQL backup method/retention on the VPS beyond the one-time pre-deployment backup described in §21/§28~~ — confirmed and resolved on 2026-09-21: recurring automated backups (database + `storage/app`) run daily via a systemd timer, upload to Backblaze B2, and have been restore-tested successfully. See §34 for the full, authoritative description.
 9. Disk space available on the VPS — **[still open]**, not reported.
 10. ~~Currently deployed Git commit (`PREVIOUS_GOOD_COMMIT`)~~ — confirmed: `60847e9e5d6ef6cdf6a2ef9c272bf04efad36f95` (§29).
 11. ~~Whether any manual staff/technician accounts already exist on staging~~ — confirmed yes: a legacy `staff@example.com` account predating Phase 10B exists; see §9.1 for the (manual, out-of-repository) review/cleanup guidance.
@@ -783,3 +785,161 @@ docker compose exec app php artisan optimize:clear
 ```
 
 `event:cache` is intentionally omitted (§12 — safe but a no-op today). `--no-dev` is intentionally not part of the Composer step (§14 — it happens inside `docker compose build`, not as a separate manual command, and is deliberately not used here). `storage:link` is intentionally omitted (§6 — not required). None of the three optional cache commands above are needed to keep the app *correct* — `docker/entrypoint.sh` itself now guarantees a fresh `.env`/config read on every start regardless (§0.5). They only affect a minor performance optimization: `config:cache` specifically must be re-run after every subsequent restart to stay in effect (§0.5), while `route:cache`/`view:cache` persist across restarts unaffected.
+
+---
+
+## 34. Automated staging backup & restore-testing system (verified 2026-09-21)
+
+**Status: implemented, scheduled, and restore-tested on the staging VPS.** This section is the authoritative, current record of the recurring backup system and supersedes the "not configured"/"remains an operational task" language in §21/§22 and the former §32 item 8 for everything that is recurring, automated, or off-server. §21's manual `mysqldump` command remains accurate and still applies to the separate, ad-hoc pre-deployment backup step in §28 step 4 — see §34.1 for how the two relate.
+
+### 34.1 How this relates to §21/§23/§28's existing backup steps
+
+There are now two distinct, complementary backup mechanisms, not one replacing the other:
+
+| | §21/§28 step 4 (pre-deployment) | §34 (this section) |
+|---|---|---|
+| Trigger | Manual, immediately before a deployment that migrates the schema | Automatic, daily via systemd timer |
+| Filename pattern | `backup-<timestamp>.sql.gz` (operator-chosen, per §21's command) | `auto-bike-workshop-<timestamp>.sql.gz` / `auto-bike-workshop-storage-<timestamp>.tar.gz` |
+| Retention | Kept indefinitely unless manually deleted (§23's "no accidental deletion" priorities apply) | 7 days locally (auto-deleted); 30 days in Backblaze B2 |
+| Scope | Database only | Database **and** `storage/app` (§22) |
+
+Automated cleanup (§34.6) only ever targets the `auto-bike-workshop-*` filename pattern — a manually-taken deployment backup, or any other historical/manual backup file in `/home/deploy/backups/bicycle-workshop`, is never touched by the retention job.
+
+### 34.2 Architecture
+
+- **VPS/project path:** the staging VPS, application at `/home/deploy/bicycle-workshop`, running via Docker Compose (§1).
+- **Database:** `bike_workshop`. MySQL remains private to Docker networking, not host-published (§0.3/§27) — the backup script reaches it through the `mysql` container, the same way §21's manual command does.
+- **Backup coverage:** (1) the MySQL database, (2) Laravel's persistent files at `storage/app` (§22).
+- **Backup script:** `/home/deploy/bin/bicycle-workshop-backup.sh` — owned `deploy:deploy`, mode `0700` (not readable/executable by other users on the box).
+- **Local backup directory:** `/home/deploy/backups/bicycle-workshop`.
+- **Automated backup filenames:**
+  - `auto-bike-workshop-<timestamp>.sql.gz`
+  - `auto-bike-workshop-storage-<timestamp>.tar.gz`
+- **Concurrency:** the script uses `flock` to guarantee only one backup run executes at a time — a manual invocation and the scheduled run can never race or interleave.
+
+### 34.3 Scheduling
+
+| | |
+|---|---|
+| systemd service | `bicycle-workshop-backup.service` |
+| systemd timer | `bicycle-workshop-backup.timer` |
+| Schedule | Daily at 02:30 Asia/Manila |
+| Timer state | Enabled and active |
+| `Persistent=true` | Yes — a missed run (e.g. the VPS was down at 02:30) fires as soon as the timer is next able to, instead of silently skipping to the next scheduled day |
+| Last manually validated run | `Result=success`, `ExecMainStatus=0` |
+
+### 34.4 Database backup method (automated)
+
+Uses `mysqldump` run inside the MySQL Docker container, via a **dedicated, least-privilege backup account** — deliberately separate from the Laravel application's own DB user (§7/§21):
+
+| | |
+|---|---|
+| Account name | `backup` |
+| Grants on `bike_workshop.*` | `SELECT`, `SHOW VIEW`, `EVENT`, `TRIGGER` |
+| Password file | `/home/deploy/backups/bicycle-workshop/.mysql-backup-password`, mode `0600` |
+
+The `backup` account cannot write, alter, or drop anything — it can only read the schema and data needed to produce a consistent dump. Its password is never printed, logged, or documented anywhere, including here; the password file's permissions (owner-only, `0600`) are what matters operationally, not its contents.
+
+`mysqldump` flags used: `--single-transaction --quick --routines --triggers --events --no-tablespaces` (the same `--no-tablespaces` rationale as §21's manual command — the `backup` account, like the application's own account, has no `PROCESS` privilege, and none is granted just to avoid this flag). Output is piped through `gzip`, and gzip integrity (`gzip -t`) is checked as part of the backup run itself, not only during a later restore test.
+
+### 34.5 Storage backup method (automated)
+
+Archives `storage/app` as `tar.gz`. Both gzip integrity (`gzip -t`) and tar integrity/listing (`tar -tzf`) are checked as part of the backup run.
+
+### 34.6 Backblaze B2 (off-server copy) and retention
+
+| | |
+|---|---|
+| rclone remote | `b2-bicycle-staging` |
+| Bucket | `stormark-bicycle-workshop-staging-backups` (private) |
+| Database prefix | `database/` |
+| Storage prefix | `storage/` |
+| rclone config file | `/home/deploy/.config/rclone/rclone.conf`, mode `0600` |
+| Local retention | 7 days — a daily cron/systemd-driven cleanup removes local files older than 7 days, matching only the `auto-bike-workshop-*` pattern (§34.1) |
+| B2 retention | 30 days, enforced by **Backblaze B2 lifecycle rules** (not by `rclone` deletion logic in the backup script) on both the `database/` and `storage/` prefixes |
+
+**Important:** B2's 30-day retention is a bucket-level lifecycle rule, not something the backup script implements or could accidentally get wrong by failing to run a cleanup step — the script only ever uploads, it never deletes from B2. The B2 application key and its contents are never documented here, in any commit, or anywhere in this repository.
+
+### 34.7 Routine backup health-check commands
+
+These commands only read status/metadata — none of them touch application data or require the backup account's password to be typed or displayed:
+
+```bash
+# Timer/service status and schedule
+systemctl status bicycle-workshop-backup.timer
+systemctl list-timers bicycle-workshop-backup.timer
+
+# Most recent run's outcome
+systemctl status bicycle-workshop-backup.service
+journalctl -u bicycle-workshop-backup.service -n 50 --no-pager
+
+# Local backups present and their ages
+ls -lh /home/deploy/backups/bicycle-workshop/
+
+# Spot-check the newest local backups' integrity
+gzip -t /home/deploy/backups/bicycle-workshop/auto-bike-workshop-<latest>.sql.gz
+gzip -t /home/deploy/backups/bicycle-workshop/auto-bike-workshop-storage-<latest>.tar.gz
+tar -tzf /home/deploy/backups/bicycle-workshop/auto-bike-workshop-storage-<latest>.tar.gz > /dev/null
+
+# Confirm the off-server copies exist in B2
+rclone ls b2-bicycle-staging:stormark-bicycle-workshop-staging-backups/database/
+rclone ls b2-bicycle-staging:stormark-bicycle-workshop-staging-backups/storage/
+```
+
+A healthy system shows: the timer `active`/`waiting` with a sane `Next` time, the most recent service run `Result=success`/`ExecMainStatus=0`, local backup files from within the last 24–48 hours, both integrity checks passing, and matching (or newer) objects present under both B2 prefixes.
+
+### 34.8 Safe database restore-test procedure
+
+**Never restore a test dump into the live `bike_workshop` database.** Every restore test — including all future ones — must target a disposable database, never the one the application actually uses.
+
+1. Select an automated backup (`auto-bike-workshop-<timestamp>.sql.gz`), locally or downloaded fresh from B2.
+2. Verify gzip integrity first: `gzip -t <file>.sql.gz`. Do not proceed if this fails.
+3. Create a disposable database, e.g. `bike_workshop_restore_test` — never reuse the live database's name for this.
+4. Import the dump into that disposable database only, using an account with sufficient privileges to create/populate it (the read-only `backup` account, §34.4, cannot perform this step — it can only produce dumps, by design).
+5. Confirm the `mysql` import command's own exit status is `0`.
+6. Compare the restored database against the live one: table count, table names, and row counts per table should match (allowing for any live writes that happened between when the backup was taken and when the comparison runs).
+7. **Drop the disposable database** once the comparison is complete — never leave a stray `_restore_test` database sitting alongside the real one.
+8. Confirm the **live** application still connects correctly afterward (e.g. `php artisan tinker --execute="DB::connection()->getPdo(); echo 'DATABASE CONNECTION: OK';"` against the real `bike_workshop`) — this step exists specifically to catch any accidental cross-contamination between the test and the live connection during the exercise.
+
+### 34.9 Safe storage restore-test procedure
+
+**Never extract a storage restore test over the live `storage/app` directory.** Every restore test — including all future ones — must extract into an isolated location, never over the live project.
+
+1. Select an automated backup (`auto-bike-workshop-storage-<timestamp>.tar.gz`), locally or downloaded fresh from B2.
+2. Verify gzip integrity: `gzip -t <file>.tar.gz`. Do not proceed if this fails.
+3. Verify tar integrity/listing: `tar -tzf <file>.tar.gz > /dev/null`. Do not proceed if this fails.
+4. Extract into an isolated `/tmp` directory (e.g. `/tmp/bicycle-workshop-storage-restore-test`) — **never** `docker compose exec app`'s live `storage/app`, and never the VPS checkout's own `storage/app` path.
+5. Compare the extracted contents against the live `storage/app` (e.g. `diff -r`). A clean `diff` (exit status `0`) confirms the backup matches; differences may be legitimate rather than a backup defect if files in the live directory changed after the backup was taken — check timestamps before treating a diff as a problem.
+6. **Remove only the isolated temporary restore directory** afterward (e.g. `rm -rf /tmp/bicycle-workshop-storage-restore-test`) — never anything under the live project path.
+
+### 34.10 Verified 2026-09-21 restore baseline
+
+Both restore procedures above were actually performed, following exactly the steps in §34.8/§34.9, with these results:
+
+**Database restore test:**
+- A selected `auto-*.sql.gz` passed gzip integrity.
+- Import into a disposable `bike_workshop_restore_test` database succeeded, exit status `0`.
+- Live database table count: 20. Restored database table count: 20. No table-name differences. Row counts matched for all 20 tables.
+- The disposable database was dropped afterward — only `bike_workshop` remained.
+- The live application's database connection was confirmed working afterward (`DATABASE CONNECTION: OK`).
+
+**Storage restore test:**
+- A selected `auto-*-storage-*.tar.gz` passed both gzip and tar integrity checks.
+- The archive was extracted into an isolated `/tmp/bicycle-workshop-storage-restore-test` directory — the live `storage/app` was never touched.
+- `diff -r` between the restored contents and the live `storage/app` snapshot returned exit status `0` (no differences).
+- The isolated temporary directory was removed afterward.
+
+**Manual backup + upload validation performed the same day**, independent of the automated schedule: a manual database dump and a manual `storage/app` archive were each created, gzip-verified, uploaded to B2, then independently re-downloaded from B2 and SHA-256-compared against their local source — both matched exactly, confirming the B2 round trip is lossless, not just that the upload command exits `0`.
+
+**This baseline is a point-in-time confirmation, not a standing guarantee** — treat a future restore test the same way: follow §34.8/§34.9 exactly, and record the outcome (or investigate immediately if it fails) rather than assuming this result still holds indefinitely.
+
+### 34.11 Operational safety rules
+
+- **Never restore any test dump directly into `bike_workshop`.** Always use a disposable database (§34.8).
+- **Never extract a storage restore test over the live `storage/app`.** Always use an isolated `/tmp` directory (§34.9).
+- **Always validate gzip (and, for storage archives, tar) integrity before trusting or importing/extracting a backup** — an unverified archive is not a usable backup.
+- **Always clean up test artifacts** — drop the disposable database, remove the isolated temp directory — immediately after each restore test, so a stray `_restore_test` database or `/tmp` directory never lingers or gets mistaken for something real.
+- **Always confirm the live application still works** (database connection for a DB restore test) after a restore-test exercise, to catch any accidental cross-contamination.
+- **Never grant the `backup` MySQL account write privileges** — its read-only grant set (`SELECT`, `SHOW VIEW`, `EVENT`, `TRIGGER`) is a deliberate, least-privilege boundary; if a future need arises for a privileged restore-automation account, create a **separate** account for it rather than widening `backup`'s grants.
+- **Never commit, print, or otherwise document** the `backup` MySQL account's password, the B2 application key, or any `.env`/database credential — the file permissions listed in §34.3/§34.4/§34.6 (`0700` on the script, `0600` on the password file and `rclone.conf`) are the actual protection; this document deliberately never repeats their contents.
+- **Never repurpose the automated `auto-bike-workshop-*` backups' retention job** to also clean up manually-taken or historical backups (§34.1) — the pattern match is deliberately narrow.
